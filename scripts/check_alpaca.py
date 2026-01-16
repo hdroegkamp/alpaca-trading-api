@@ -50,7 +50,7 @@ def main():
         "Found API keys in environment — attempting to create client and fetch account info (this will contact Alpaca)..."
     )
     try:
-        client = TradingClient(key, secret, base_url=base)
+        client = TradingClient(key, secret, paper=True)
         account = client.get_account()
         print("Successfully retrieved account:")
         print(account)
