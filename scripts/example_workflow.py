@@ -17,6 +17,11 @@ from datetime import datetime, timedelta
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from src.trading.data import AlpacaDataFetcher, DataStore
 from src.trading.strategy.examples import MovingAverageCrossover
 from src.trading.backtest import VectorizedBacktest

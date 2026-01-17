@@ -1,0 +1,33 @@
+# Top 30 Most Liquid US Stocks
+# Updated: January 2026
+
+AAPL
+MSFT
+GOOGL
+AMZN
+NVDA
+META
+TSLA
+BRK.B
+JPM
+V
+UNH
+JNJ
+WMT
+XOM
+LLY
+MA
+PG
+AVGO
+HD
+CVX
+MRK
+ABBV
+COST
+PEP
+KO
+BAC
+ADBE
+CRM
+NFLX
+AMD

@@ -83,7 +83,7 @@ def main():
 
     try:
         # Load data
-        store = DataStore(data_dir=args.data_dir)
+        store = DataStore(data_dir=args.data_dir, organize_by_timeframe=True)
         data = store.load(args.symbol, timeframe=args.timeframe)
 
         if data is None:

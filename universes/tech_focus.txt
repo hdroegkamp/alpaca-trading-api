@@ -1,0 +1,33 @@
+# Technology-Focused Watchlist
+# High-growth tech stocks and related companies
+
+# FAANG/Mega Cap
+AAPL
+MSFT
+GOOGL
+AMZN
+META
+NVDA
+TSLA
+
+# Semiconductors
+AMD
+INTC
+QCOM
+AVGO
+MU
+TSM
+ASML
+
+# Software
+CRM
+ORCL
+ADBE
+SNOW
+PLTR
+NOW
+
+# Cloud/SaaS
+MSFT
+AMZN
+GOOGL

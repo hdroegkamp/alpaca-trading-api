@@ -7,10 +7,16 @@ Usage:
 
 import argparse
 import sys
+import pandas as pd
 from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from src.trading.data import AlpacaDataFetcher, DataStore
 from src.trading.utils.logging import setup_logger
@@ -30,7 +36,22 @@ def main():
     parser.add_argument(
         "--timeframe", default="1Day", help="Bar timeframe (1Day, 1Hour, etc.)"
     )
-    parser.add_argument("--data-dir", default="data", help="Data storage directory")
+    parser.add_argument(
+        "--data-dir",
+        default="data",
+        help="Data storage directory (e.g., Z:\\market_data)",
+    )
+    parser.add_argument(
+        "--organize",
+        action="store_true",
+        default=True,
+        help="Organize data by timeframe subdirectories (default: True)",
+    )
+    parser.add_argument(
+        "--show-inventory",
+        action="store_true",
+        help="Show inventory of downloaded data after completion",
+    )
 
     args = parser.parse_args()
 
@@ -41,7 +62,7 @@ def main():
     try:
         # Initialize fetcher and storage
         fetcher = AlpacaDataFetcher()
-        store = DataStore(data_dir=args.data_dir)
+        store = DataStore(data_dir=args.data_dir, organize_by_timeframe=args.organize)
 
         # Download data for each symbol
         for symbol in args.symbols:
@@ -64,6 +85,20 @@ def main():
 
         logger.info("Download complete!")
         logger.info(f"Available symbols: {store.list_symbols()}")
+
+        # Show inventory if requested
+        if args.show_inventory:
+            print("\n" + "=" * 80)
+            print("DATA INVENTORY")
+            print("=" * 80)
+            inventory = store.get_inventory()
+            if not inventory.empty:
+                pd.set_option("display.max_columns", None)
+                pd.set_option("display.width", None)
+                print(inventory.to_string(index=False))
+                print(f"\nTotal storage: {inventory['file_size_mb'].sum():.2f} MB")
+            else:
+                print("No data stored yet.")
 
     except Exception as e:
         logger.error(f"Fatal error: {e}")

@@ -2,7 +2,7 @@
 
 A modular Python framework for backtesting and deploying quantitative trading strategies.
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 src/trading/
@@ -27,7 +27,7 @@ tests/
 └── unit/            # Unit tests
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Download Historical Data
 
@@ -61,7 +61,7 @@ Data is saved in `data/` directory as compressed parquet files.
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_strategy.py -v
 ```
 
-## 📊 Built-in Strategies
+## Built-in Strategies
 
 ### Moving Average Crossover
 Goes long when fast MA > slow MA, short when fast MA < slow MA.
@@ -124,7 +124,7 @@ class MyStrategy(Strategy):
 
 Then register it in `run_backtest.py` to use from command line.
 
-## 📈 Performance Metrics
+## Performance Metrics
 
 The backtest engine calculates:
 
@@ -136,7 +136,7 @@ The backtest engine calculates:
 - **Win Rate**: Percentage of profitable trades
 - **Number of Trades**: Total position changes
 
-## 🧪 Backtesting Design
+## Backtesting Design
 
 ### Vectorized Backtesting
 The current implementation uses **vectorized backtesting** for speed:
@@ -157,7 +157,7 @@ For more realistic testing, an event-driven engine will be added:
 - Realistic fill simulation with slippage
 - Latency modeling
 
-## 🔐 Data Storage
+## Data Storage
 
 Data is stored as compressed parquet files in `data/`:
 - Format: `{SYMBOL}_{TIMEFRAME}.parquet`
@@ -172,14 +172,14 @@ store = DataStore()
 print(store.list_symbols())
 ```
 
-## 🎯 Roadmap
+## Roadmap
 
 ### Current (Phase 1 - Research)
-- ✅ Vectorized backtesting
-- ✅ Basic strategies (MA crossover, mean reversion)
-- ✅ Data download and storage
-- ✅ Performance metrics
-- ✅ Unit tests
+- [x] Vectorized backtesting
+- [x] Basic strategies (MA crossover, mean reversion)
+- [x] Data download and storage
+- [x] Performance metrics
+- [x] Unit tests
 
 ### Phase 2 - Realism
 - ⬜ Event-driven backtest engine
@@ -202,7 +202,7 @@ print(store.list_symbols())
 - ⬜ Experiment tracking (MLflow)
 - ⬜ CI/CD for strategy deployment
 
-## 📚 API Reference
+## API Reference
 
 ### Strategy Base Class
 
@@ -255,7 +255,7 @@ store.save('AAPL', data)
 data = store.load('AAPL')
 ```
 
-## 🛡️ Risk Management
+## Risk Management
 
 The `RiskManager` class enforces limits:
 - Max position size (% of capital)
@@ -279,7 +279,7 @@ allowed, reason = risk_mgr.check_position_size(
 )
 ```
 
-## 🔍 Debugging and Logging
+## Debugging and Logging
 
 Logs are output to console by default. Configure logging:
 
@@ -290,7 +290,7 @@ logger = setup_logger('my_strategy', log_file='logs/strategy.log')
 logger.info("Strategy initialized")
 ```
 
-## 💡 Tips & Best Practices
+## Tips & Best Practices
 
 1. **Start Simple**: Begin with a simple strategy to understand the framework
 2. **Test First**: Write unit tests for your strategy logic
@@ -301,13 +301,13 @@ logger.info("Strategy initialized")
 7. **Data Quality**: Inspect your data for gaps and anomalies
 8. **Reproducibility**: Pin package versions and seed random number generators
 
-## 📖 Resources
+## Resources
 
 - [Alpaca API Documentation](https://alpaca.markets/docs/)
 - [pandas Documentation](https://pandas.pydata.org/docs/)
 - [Quantitative Trading](https://www.quantstart.com/) - QuantStart tutorials
 
-## 🤝 Contributing
+## Contributing
 
 This is a personal project, but improvements are welcome:
 1. Add new strategies in `src/trading/strategy/examples/`
@@ -315,7 +315,7 @@ This is a personal project, but improvements are welcome:
 3. Add tests for new features
 4. Document your changes
 
-## ⚠️ Disclaimer
+## Disclaimer
 
 This software is for educational and research purposes only. Past performance does not guarantee future results. Trading involves risk of loss. Always test strategies thoroughly on paper accounts before live trading.
 

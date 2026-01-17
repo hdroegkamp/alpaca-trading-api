@@ -2,7 +2,7 @@
 
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Dict, List, Any, cast
 import os
 
 
@@ -60,7 +60,7 @@ class AlpacaDataFetcher:
         try:
             from alpaca.data.historical import StockHistoricalDataClient
             from alpaca.data.requests import StockBarsRequest
-            from alpaca.data.timeframe import TimeFrame
+            from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
         except ImportError:
             raise ImportError("alpaca-py not installed. Run: pip install alpaca-py")
 
@@ -70,8 +70,8 @@ class AlpacaDataFetcher:
         # Parse timeframe
         timeframe_map = {
             "1Min": TimeFrame.Minute,
-            "5Min": TimeFrame(5, "Minute"),
-            "15Min": TimeFrame(15, "Minute"),
+            "5Min": TimeFrame(5, cast(TimeFrameUnit, TimeFrameUnit.Minute)),
+            "15Min": TimeFrame(15, cast(TimeFrameUnit, TimeFrameUnit.Minute)),
             "1Hour": TimeFrame.Hour,
             "1Day": TimeFrame.Day,
         }
@@ -91,8 +91,39 @@ class AlpacaDataFetcher:
         # Fetch data
         bars = client.get_stock_bars(request)
 
-        # Convert to DataFrame
-        df = bars.df
+        # Convert to DataFrame (alpaca client may return different objects depending on version)
+        df = getattr(bars, "df", None)
+        if df is None:
+            # Try common fallbacks: callable conversions (to_dataframe/to_frame/to_df), iterable of bar objects/dicts, or raw attributes
+            to_df_callable = None
+            for name in ("to_dataframe", "to_frame", "to_df"):
+                attr = getattr(bars, name, None)
+                if callable(attr):
+                    to_df_callable = attr
+                    break
+
+            if to_df_callable is not None:
+                try:
+                    df = to_df_callable()
+                except Exception:
+                    df = None
+
+            if df is None:
+                try:
+                    df = pd.DataFrame(
+                        [
+                            getattr(b, "_raw", None) or getattr(b, "raw", None) or b
+                            for b in bars
+                        ]
+                    )
+                except Exception:
+                    raise ValueError(
+                        "Could not convert alpaca bars to DataFrame; inspect the 'bars' object returned by the client"
+                    )
+        # Ensure we have a DataFrame
+        if not isinstance(df, pd.DataFrame):
+            # cast to Any to satisfy pandas' constructor typing when df may be an arbitrary object/iterable
+            df = pd.DataFrame(cast(Any, df))
 
         # If multi-index (multiple symbols), extract single symbol
         if isinstance(df.index, pd.MultiIndex):
@@ -107,15 +138,16 @@ class AlpacaDataFetcher:
             if col not in df.columns:
                 raise ValueError(f"Missing column: {col}")
 
-        return df[expected_cols]
+        # Explicitly cast to DataFrame to satisfy static type checkers
+        return cast(pd.DataFrame, df[expected_cols])
 
     def fetch_multiple(
         self,
-        symbols: list[str],
+        symbols: List[str],
         start: str,
         end: Optional[str] = None,
         timeframe: str = "1Day",
-    ) -> dict[str, pd.DataFrame]:
+    ) -> Dict[str, pd.DataFrame]:
         """Fetch data for multiple symbols.
 
         Args:
@@ -127,7 +159,7 @@ class AlpacaDataFetcher:
         Returns:
             Dictionary mapping symbol to DataFrame
         """
-        data = {}
+        data: Dict[str, pd.DataFrame] = {}
         for symbol in symbols:
             try:
                 df = self.fetch_bars(symbol, start, end, timeframe)

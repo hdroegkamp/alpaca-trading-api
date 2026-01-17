@@ -133,11 +133,11 @@ alpaca-trading-api/
 6. **Safety**: Risk management and circuit breakers built-in
 
 ### Phase 1 (Current): Research & Prototyping
-- ✅ Vectorized backtesting
-- ✅ Basic strategies (MA, mean reversion)
-- ✅ Data download and storage
-- ✅ Performance metrics
-- ✅ Unit tests
+- [x] Vectorized backtesting
+- [x] Basic strategies (MA, mean reversion)
+- [x] Data download and storage
+- [x] Performance metrics
+- [x] Unit tests
 
 ### Phase 2 (Future): Realistic Testing
 - ⬜ Event-driven backtest
