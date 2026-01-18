@@ -12,7 +12,7 @@ sys.path.insert(0, str(project_root))
 
 from src.trading.data import DataStore
 
-st.set_page_config(page_title="Data Quality", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Data Quality", layout="wide")
 
 st.title("Data Quality Checker")
 st.markdown("Verify data completeness and identify potential issues")

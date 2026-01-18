@@ -15,7 +15,7 @@ from src.trading.data import DataStore
 from src.trading.strategy.examples import MovingAverageCrossover, MeanReversion
 from src.trading.backtest import VectorizedBacktest
 
-st.set_page_config(page_title="Strategy Analyzer", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Strategy Analyzer", layout="wide")
 
 st.title("Strategy Analyzer")
 st.markdown("Test and optimize trading strategies with backtesting")
@@ -187,15 +187,17 @@ if selected_symbol:
 
         with col2:
             st.metric("Max Drawdown", f"{summary['max_drawdown']*100:.2f}%")
-            st.metric("Calmar Ratio", f"{summary['calmar_ratio']:.2f}")
+            st.metric("CAGR", f"{summary.get('cagr', 0)*100:.2f}%")
 
         with col3:
             st.metric("Win Rate", f"{summary['win_rate']*100:.1f}%")
-            st.metric("Profit Factor", f"{summary['profit_factor']:.2f}")
+            st.metric("Volatility", f"{summary['volatility']*100:.2f}%")
 
         with col4:
-            st.metric("Volatility", f"{summary['volatility']*100:.2f}%")
-            st.metric("Trades", f"{summary['num_trades']}")
+            st.metric(
+                "Trades", f"{summary.get('n_trades', summary.get('num_trades', 0))}"
+            )
+            st.metric("Days", f"{summary.get('n_days', len(results))}")
 
         st.markdown("---")
 
@@ -333,7 +335,7 @@ if selected_symbol:
                     "Date": results.index,
                     "Position": results["position"],
                     "Equity": results["equity"],
-                    "Returns": results["returns"],
+                    "Returns": results["strategy_return"],
                 }
             )
 

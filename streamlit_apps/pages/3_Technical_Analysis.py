@@ -14,7 +14,7 @@ sys.path.insert(0, str(project_root))
 
 from src.trading.data import DataStore
 
-st.set_page_config(page_title="Technical Analysis", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Technical Analysis", layout="wide")
 
 st.title("Technical Analysis")
 st.markdown("Advanced charting with technical indicators")
@@ -76,7 +76,7 @@ with st.sidebar:
     show_ema = st.checkbox("Exponential Moving Average (EMA)")
     if show_ema:
         ema_periods = st.multiselect(
-            "EMA Periods", [10, 20, 50, 100, 200], default=[12, 26]
+            "EMA Periods", [9, 12, 20, 26, 50, 100, 200], default=[12, 26]
         )
 
     show_bollinger = st.checkbox("Bollinger Bands")
@@ -320,27 +320,27 @@ if selected_symbol:
             line_dash="dash",
             line_color="red",
             opacity=0.5,
-            row=str(current_row),
-            col="1",
+            row=current_row,  # type: ignore
+            col=1,  # type: ignore
         )
         fig.add_hline(
             y=30,
             line_dash="dash",
             line_color="green",
             opacity=0.5,
-            row=str(current_row),
-            col="1",
+            row=current_row,  # type: ignore
+            col=1,  # type: ignore
         )
         fig.add_hline(
             y=50,
             line_dash="dot",
             line_color="gray",
             opacity=0.3,
-            row=str(current_row),
-            col="1",
+            row=current_row,  # type: ignore
+            col=1,  # type: ignore
         )
 
-        fig.update_yaxes(range=[0, 100], row=str(current_row), col="1")
+        fig.update_yaxes(range=[0, 100], row=current_row, col=1)  # type: ignore
         current_row += 1
 
     # Add MACD

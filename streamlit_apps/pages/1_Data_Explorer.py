@@ -13,7 +13,7 @@ sys.path.insert(0, str(project_root))
 
 from src.trading.data import DataStore
 
-st.set_page_config(page_title="Data Explorer", page_icon="�", layout="wide")
+st.set_page_config(page_title="Data Explorer", layout="wide")
 
 st.title("Data Explorer")
 st.markdown("Visualize and analyze historical market data")
