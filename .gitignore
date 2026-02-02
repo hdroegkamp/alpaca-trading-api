@@ -16,3 +16,6 @@ __pycache__/
 build/
 dist/
 .python-version
+
+# Career development documentation (personal use only)
+career-docs/
