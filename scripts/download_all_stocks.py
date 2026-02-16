@@ -19,6 +19,8 @@ from typing import List
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pandas as pd
+
 # Load environment variables from .env file
 from dotenv import load_dotenv
 
@@ -135,8 +137,14 @@ def main():
     parser.add_argument(
         "--skip-existing",
         action="store_true",
+        default=False,
+        help="Skip symbols that already have data (no updates)",
+    )
+    parser.add_argument(
+        "--update-existing",
+        action="store_true",
         default=True,
-        help="Skip symbols that already have data (default: True)",
+        help="Update existing symbols with new data since last date (default: True)",
     )
     parser.add_argument(
         "--min-price",
@@ -221,6 +229,7 @@ def main():
         skip_count = 0
         error_count = 0
         no_data_count = 0
+        update_count = 0
 
         start_time = time.time()
 
@@ -234,17 +243,73 @@ def main():
 
                 logger.info(
                     f"[{i}/{len(symbols)}] {symbol} | "
-                    f"✓ {success_count} ↷ {skip_count} ✗ {error_count} ∅ {no_data_count} | "
+                    f"✓ {success_count} ⟳ {update_count} ↷ {skip_count} ✗ {error_count} ∅ {no_data_count} | "
                     f"ETA: {eta_seconds/60:.0f}m"
                 )
 
                 # Check if already exists
-                if args.skip_existing and store.exists(symbol, args.timeframe):
-                    logger.info(f"  ↷ Skipping (already exists)")
-                    skip_count += 1
-                    continue
+                if store.exists(symbol, args.timeframe):
+                    if args.skip_existing:
+                        logger.info(f"  ↷ Skipping (already exists, no update)")
+                        skip_count += 1
+                        continue
+                    elif args.update_existing:
+                        # Get the last date of existing data
+                        metadata = store.get_metadata(symbol, args.timeframe)
+                        if metadata:
+                            last_date = metadata["end_date"]
+                            # Add one day to avoid duplicates
+                            from datetime import datetime, timedelta
 
-                # Fetch data
+                            last_dt = datetime.fromisoformat(
+                                last_date.replace("Z", "+00:00")
+                            )
+                            update_start = (last_dt + timedelta(days=1)).strftime(
+                                "%Y-%m-%d"
+                            )
+
+                            logger.info(f"  ⟳ Updating from {update_start}...")
+
+                            # Fetch only new data
+                            new_data = fetcher.fetch_bars(
+                                symbol=symbol,
+                                start=update_start,
+                                end=args.end,
+                                timeframe=args.timeframe,
+                            )
+
+                            if new_data is None or len(new_data) == 0:
+                                logger.info(
+                                    f"  ✓ Already up-to-date (last: {last_date[:10]})"
+                                )
+                                skip_count += 1
+                                continue
+
+                            # Load existing data and append new data
+                            existing_data = store.load(symbol, args.timeframe)
+                            if existing_data is not None:
+                                # Combine and remove any duplicate timestamps
+                                combined_data = pd.concat([existing_data, new_data])
+                                combined_data = combined_data[
+                                    ~combined_data.index.duplicated(keep="last")
+                                ]
+                                combined_data = combined_data.sort_index()
+
+                                # Save updated data
+                                store.save(
+                                    symbol, combined_data, timeframe=args.timeframe
+                                )
+                                logger.info(
+                                    f"  ⟳ Updated: +{len(new_data)} bars (now {len(combined_data)} total, {combined_data.index[0]} to {combined_data.index[-1]})"
+                                )
+                                update_count += 1
+                                time.sleep(args.delay)
+                                continue
+                        else:
+                            logger.info(f"  ! No metadata found, re-downloading...")
+                            # Fall through to full download
+
+                # Fetch data (full download for new symbols)
                 data = fetcher.fetch_bars(
                     symbol=symbol,
                     start=args.start,
@@ -282,7 +347,8 @@ def main():
         logger.info("=" * 80)
         logger.info("DOWNLOAD COMPLETE")
         logger.info("=" * 80)
-        logger.info(f"✓ Success:  {success_count}")
+        logger.info(f"✓ New:      {success_count}")
+        logger.info(f"⟳ Updated:  {update_count}")
         logger.info(f"↷ Skipped:  {skip_count}")
         logger.info(f"∅ No data:  {no_data_count}")
         logger.info(f"✗ Errors:   {error_count}")
