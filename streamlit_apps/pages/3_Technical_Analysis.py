@@ -14,8 +14,6 @@ sys.path.insert(0, str(project_root))
 
 from src.trading.data import DataStore
 
-st.set_page_config(page_title="Technical Analysis", layout="wide")
-
 st.title("Technical Analysis")
 st.markdown("Advanced charting with technical indicators")
 st.markdown("---")
@@ -401,7 +399,7 @@ if selected_symbol:
 
     fig.update_xaxes(title_text="Date", row=num_rows, col=1)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # Technical summary
     st.markdown("---")

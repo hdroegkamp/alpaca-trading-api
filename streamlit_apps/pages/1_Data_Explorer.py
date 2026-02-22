@@ -13,8 +13,6 @@ sys.path.insert(0, str(project_root))
 
 from src.trading.data import DataStore
 
-st.set_page_config(page_title="Data Explorer", layout="wide")
-
 st.title("Data Explorer")
 st.markdown("Visualize and analyze historical market data")
 st.markdown("---")
@@ -237,7 +235,7 @@ if not compare_mode:
 
             fig.update_xaxes(title_text="Date")
 
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Statistics
             st.markdown("---")
@@ -328,7 +326,7 @@ else:
             hovermode="x unified",
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Performance comparison table
         st.markdown("---")

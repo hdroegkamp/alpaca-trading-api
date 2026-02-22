@@ -12,8 +12,6 @@ sys.path.insert(0, str(project_root))
 
 from src.trading.data import DataStore
 
-st.set_page_config(page_title="Data Quality", layout="wide")
-
 st.title("Data Quality Checker")
 st.markdown("Verify data completeness and identify potential issues")
 st.markdown("---")
@@ -134,7 +132,7 @@ fig.update_layout(
     hovermode="closest",
 )
 
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 st.markdown("---")
 

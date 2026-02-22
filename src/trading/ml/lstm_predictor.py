@@ -37,6 +37,7 @@ class LSTMPredictor:
 
         self.model = None
         self.scaler = MinMaxScaler(feature_range=(0, 1))
+        self.target_scaler = MinMaxScaler(feature_range=(0, 1))
         self.feature_columns = None
         self.history = None
 
@@ -57,12 +58,14 @@ class LSTMPredictor:
 
         model = keras.Sequential()
 
+        # Explicit Input layer (avoids deprecated input_shape argument on layers)
+        model.add(keras.Input(shape=(self.sequence_length, n_features)))
+
         # First LSTM layer
         model.add(
             layers.LSTM(
                 units=self.lstm_units[0],
                 return_sequences=len(self.lstm_units) > 1,
-                input_shape=(self.sequence_length, n_features),
             )
         )
         model.add(layers.Dropout(self.dropout_rate))
@@ -76,11 +79,11 @@ class LSTMPredictor:
         # Dense output layer
         model.add(layers.Dense(units=1))
 
-        # Compile model
+        # Compile model — use explicit name 'mae' so history keys are consistent
         model.compile(
             optimizer=keras.optimizers.Adam(learning_rate=self.learning_rate),
             loss="mean_squared_error",
-            metrics=["mean_absolute_error"],
+            metrics=["mae"],
         )
 
         self.model = model
@@ -142,6 +145,15 @@ class LSTMPredictor:
 
         self.feature_columns = feature_cols
 
+        # Drop rows that contain NaN or inf in any feature or target column —
+        # NaN rows are produced by rolling-window indicators (SMA-200, ATR,
+        # lagged features, etc.) at the start of the series.  Inf values can
+        # appear in ratio columns (e.g. bb_percent when bands collapse, or
+        # volume_ratio when the volume SMA is zero).  Both propagate through
+        # MinMaxScaler and cause flat loss curves and NaN metrics.
+        cols_needed = list(dict.fromkeys(feature_cols + [target_col]))
+        df = df[cols_needed].replace([np.inf, -np.inf], np.nan).dropna()
+
         # Extract features and target
         features = df[feature_cols].values
         target = df[target_col].values.reshape(-1, 1)  # type: ignore
@@ -149,8 +161,11 @@ class LSTMPredictor:
         # Scale features
         features_scaled = self.scaler.fit_transform(features)
 
+        # Scale target (prevents exploding gradients from raw price magnitudes)
+        target_scaled = self.target_scaler.fit_transform(target)
+
         # Create sequences
-        X, y = self.create_sequences(features_scaled, target)
+        X, y = self.create_sequences(features_scaled, target_scaled)
 
         # Split into train/val/test
         # First split: separate test set
@@ -231,7 +246,17 @@ class LSTMPredictor:
             verbose=verbose,
         )
 
-        return self.history.history
+        # Normalize MAE key names: Keras may return "mean_absolute_error" or "mae"
+        # depending on the version. Always expose "mae" / "val_mae" to callers.
+        hist = dict(self.history.history)
+        for src, dst in [
+            ("mean_absolute_error", "mae"),
+            ("val_mean_absolute_error", "val_mae"),
+        ]:
+            if src in hist and dst not in hist:
+                hist[dst] = hist.pop(src)
+
+        return hist
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Make predictions.
@@ -266,13 +291,16 @@ class LSTMPredictor:
         # Create sequences
         X, _ = self.create_sequences(features_scaled)
 
-        # Predict
-        predictions = self.predict(X)
+        # Predict and inverse-transform to real price space
+        predictions_scaled = self.predict(X)
+        predictions = self.target_scaler.inverse_transform(
+            predictions_scaled.reshape(-1, 1)
+        ).flatten()
 
         # Create series with proper index
         # Note: predictions start at index sequence_length
         pred_index = df.index[self.sequence_length :]
-        return pd.Series(predictions.flatten(), index=pred_index)
+        return pd.Series(predictions, index=pred_index)
 
     def evaluate(self, X_test: np.ndarray, y_test: np.ndarray) -> Dict[str, float]:
         """Evaluate model performance.
@@ -287,21 +315,37 @@ class LSTMPredictor:
         if self.model is None:
             raise ValueError("Model not trained. Call train() first.")
 
-        # Get predictions
-        y_pred = self.predict(X_test)
+        # Get predictions (scaled space)
+        y_pred_scaled = self.predict(X_test)
+
+        # Inverse-transform both to real price space for interpretable metrics
+        y_test_real = self.target_scaler.inverse_transform(
+            y_test.reshape(-1, 1)
+        ).flatten()
+        y_pred_real = self.target_scaler.inverse_transform(
+            y_pred_scaled.reshape(-1, 1)
+        ).flatten()
 
         # Calculate metrics
-        mse = float(np.mean((y_test - y_pred) ** 2))
-        mae = float(np.mean(np.abs(y_test - y_pred)))
+        mse = float(np.mean((y_test_real - y_pred_real) ** 2))
+        mae = float(np.mean(np.abs(y_test_real - y_pred_real)))
         rmse = float(np.sqrt(mse))
 
         # Calculate directional accuracy
-        actual_direction = np.sign(np.diff(y_test.flatten()))
-        pred_direction = np.sign(np.diff(y_pred.flatten()))
+        actual_direction = np.sign(np.diff(y_test_real))
+        pred_direction = np.sign(np.diff(y_pred_real))
         directional_accuracy = float(np.mean(actual_direction == pred_direction))
 
-        # MAPE
-        mape = float(np.mean(np.abs((y_test - y_pred) / y_test)) * 100)
+        # MAPE (guard against zero prices)
+        nonzero = y_test_real != 0
+        mape = float(
+            np.mean(
+                np.abs(
+                    (y_test_real[nonzero] - y_pred_real[nonzero]) / y_test_real[nonzero]
+                )
+            )
+            * 100
+        )
 
         return {
             "mse": mse,
@@ -323,25 +367,33 @@ class LSTMPredictor:
         Returns:
             DataFrame with actual and predicted values
         """
-        # Predict on all sets
+        # Predict on all sets (scaled space)
         train_pred = self.predict(data_dict["X_train"])
         val_pred = self.predict(data_dict["X_val"])
         test_pred = self.predict(data_dict["X_test"])
 
-        # Combine predictions
-        all_pred = np.concatenate([train_pred, val_pred, test_pred])
+        # Combine and inverse-transform to real price space
+        all_pred_scaled = np.concatenate([train_pred, val_pred, test_pred])
+        all_actual_scaled = np.concatenate(
+            [
+                data_dict["y_train"].flatten(),
+                data_dict["y_val"].flatten(),
+                data_dict["y_test"].flatten(),
+            ]
+        )
+
+        all_pred = self.target_scaler.inverse_transform(
+            all_pred_scaled.reshape(-1, 1)
+        ).flatten()
+        all_actual = self.target_scaler.inverse_transform(
+            all_actual_scaled.reshape(-1, 1)
+        ).flatten()
 
         # Create result DataFrame
         result_df = pd.DataFrame(
             {
-                "actual": np.concatenate(
-                    [
-                        data_dict["y_train"].flatten(),
-                        data_dict["y_val"].flatten(),
-                        data_dict["y_test"].flatten(),
-                    ]
-                ),
-                "predicted": all_pred.flatten(),
+                "actual": all_actual,
+                "predicted": all_pred,
             }
         )
 
@@ -376,6 +428,7 @@ class LSTMPredictor:
         # Save scaler and metadata
         metadata = {
             "scaler": self.scaler,
+            "target_scaler": self.target_scaler,
             "feature_columns": self.feature_columns,
             "sequence_length": self.sequence_length,
             "lstm_units": self.lstm_units,
@@ -407,6 +460,9 @@ class LSTMPredictor:
             metadata = pickle.load(f)
 
         self.scaler = metadata["scaler"]
+        self.target_scaler = metadata.get(
+            "target_scaler", MinMaxScaler(feature_range=(0, 1))
+        )
         self.feature_columns = metadata["feature_columns"]
         self.sequence_length = metadata["sequence_length"]
         self.lstm_units = metadata["lstm_units"]

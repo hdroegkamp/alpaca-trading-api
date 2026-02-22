@@ -15,8 +15,6 @@ from src.trading.data import DataStore
 from src.trading.strategy.examples import MovingAverageCrossover, MeanReversion
 from src.trading.backtest import VectorizedBacktest
 
-st.set_page_config(page_title="Strategy Analyzer", layout="wide")
-
 st.title("Strategy Analyzer")
 st.markdown("Test and optimize trading strategies with backtesting")
 st.markdown("---")
@@ -260,7 +258,7 @@ if selected_symbol:
 
         fig.update_layout(height=700, hovermode="x unified", showlegend=True)
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Strategy signals visualization
         st.markdown("---")
@@ -325,7 +323,7 @@ if selected_symbol:
             hovermode="x unified",
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # Trade log
         st.markdown("---")

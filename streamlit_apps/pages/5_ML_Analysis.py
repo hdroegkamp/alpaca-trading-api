@@ -29,8 +29,6 @@ from src.trading.ml.ml_strategy import (
 from src.trading.backtest.vectorized import VectorizedBacktest
 from src.trading.strategy.examples.moving_average import MovingAverageCrossover
 
-st.set_page_config(page_title="ML Analysis", page_icon="🤖", layout="wide")
-
 st.title("Machine Learning Analysis")
 st.markdown("Train ML models, analyze predictions, and compare strategy performance")
 
@@ -81,11 +79,22 @@ with tab1:
     with col1:
         st.subheader("Data Selection")
 
-        symbol = st.selectbox(
+        # Symbol search input
+        symbol_input = st.text_input(
             "Symbol",
-            options=available_symbols[:100],
-            index=0 if len(available_symbols) > 0 else None,
-        )
+            value="",
+            placeholder="Type symbol (e.g., AAPL, MSFT, TSLA)",
+            help=f"{len(available_symbols)} symbols available",
+        ).upper()
+
+        # Validate symbol exists
+        if symbol_input and symbol_input not in available_symbols:
+            st.warning(
+                f"Symbol '{symbol_input}' not found in data. Available symbols: {len(available_symbols)}"
+            )
+            symbol = None
+        else:
+            symbol = symbol_input if symbol_input else None
 
         timeframe = st.selectbox(
             "Timeframe", options=["1Day", "1Hour", "15Min"], index=0
@@ -153,7 +162,7 @@ with tab1:
                     hovermode="x unified",
                 )
 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Feature statistics table
                 st.subheader("Feature Statistics")
@@ -252,7 +261,7 @@ with tab2:
                         height=300,
                     )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                     # Save model button
                     if st.button("Save Model"):
@@ -338,6 +347,11 @@ with tab2:
 
                     history = st.session_state["lstm_history"]
 
+                    # Normalise MAE key names — older cached histories may still
+                    # use the long form that Keras emits before version ~2.12.
+                    mae_key = "mae" if "mae" in history else "mean_absolute_error"
+                    val_mae_key = "val_mae" if "val_mae" in history else "val_mean_absolute_error"
+
                     # Plot training history
                     fig = make_subplots(rows=1, cols=2, subplot_titles=["Loss", "MAE"])
 
@@ -356,7 +370,7 @@ with tab2:
 
                     fig.add_trace(
                         go.Scatter(
-                            y=history["mean_absolute_error"],
+                            y=history[mae_key],
                             name="Train MAE",
                             mode="lines",
                         ),
@@ -365,7 +379,7 @@ with tab2:
                     )
                     fig.add_trace(
                         go.Scatter(
-                            y=history["val_mean_absolute_error"],
+                            y=history[val_mae_key],
                             name="Val MAE",
                             mode="lines",
                         ),
@@ -377,7 +391,7 @@ with tab2:
                     fig.update_xaxes(title_text="Epoch", row=1, col=2)
                     fig.update_layout(height=300, showlegend=True)
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                     # Evaluation metrics
                     lstm_model = st.session_state["lstm_model"]
@@ -465,7 +479,7 @@ with tab3:
                         hovermode="x unified",
                     )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
             with col2:
                 if "rf_model" in st.session_state:
@@ -506,7 +520,7 @@ with tab3:
                         height=400,
                     )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
         else:  # Feature Importance
             st.subheader("Feature Importance Analysis")
@@ -533,7 +547,7 @@ with tab3:
                         height=500, yaxis={"categoryorder": "total ascending"}
                     )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 with col2:
                     st.write("**SHAP Values**")
@@ -556,7 +570,7 @@ with tab3:
                                 height=500, yaxis={"categoryorder": "total ascending"}
                             )
 
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width="stretch")
 
                         except ImportError:
                             st.warning(
@@ -696,7 +710,7 @@ with tab4:
                     hovermode="x unified",
                 )
 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Performance metrics comparison
                 st.subheader("Performance Metrics")
