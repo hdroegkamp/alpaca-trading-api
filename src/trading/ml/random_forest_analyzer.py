@@ -323,9 +323,13 @@ class RandomForestAnalyzer:
         # Calculate SHAP values
         self.shap_values = self.shap_explainer.shap_values(X_sample)
 
-        # For binary classification, use positive class
+        # For binary classification, use positive class.
+        # Older SHAP (<0.46) returns a list of [neg_class, pos_class] arrays.
+        # Newer SHAP (>=0.46) returns a single 3D array (n_samples, n_features, n_classes).
         if isinstance(self.shap_values, list):
             self.shap_values = self.shap_values[1]
+        elif isinstance(self.shap_values, np.ndarray) and self.shap_values.ndim == 3:
+            self.shap_values = self.shap_values[:, :, 1]
 
         return self.shap_values
 

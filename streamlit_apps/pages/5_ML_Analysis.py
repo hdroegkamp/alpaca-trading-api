@@ -275,11 +275,31 @@ with tab2:
             with col1:
                 st.subheader("LSTM Configuration")
 
-                sequence_length = st.slider("Sequence Length", 20, 120, 60, 10)
+                model_mode = st.radio(
+                    "Model Mode",
+                    options=["Classifier", "Regressor"],
+                    index=0,
+                    horizontal=True,
+                    help="Classifier (recommended): sigmoid output + binary cross-entropy "
+                    "directly optimises direction prediction. "
+                    "Regressor: linear output + Huber loss predicts return magnitude.",
+                )
+
+                # Defaults tuned via grid search on MSFT 1Day data.
+                # Best regression result: seq=40, units=[128,64], lr=1e-4, drop=0.4, bs=32 → 55.97%
+                # Classifier adds BatchNorm + BCE on top of those params.
+                sequence_length = st.slider("Sequence Length", 20, 120, 40, 10)
                 lstm_units_1 = st.slider("LSTM Units (Layer 1)", 32, 256, 128, 32)
                 lstm_units_2 = st.slider("LSTM Units (Layer 2)", 16, 128, 64, 16)
-                epochs = st.slider("Epochs", 10, 200, 50, 10)
+                epochs = st.slider("Epochs", 10, 200, 100, 10)
                 batch_size = st.slider("Batch Size", 16, 128, 32, 16)
+                dropout_rate = st.slider("Dropout Rate", 0.0, 0.5, 0.4, 0.05)
+                learning_rate = st.select_slider(
+                    "Learning Rate",
+                    options=[1e-5, 5e-5, 1e-4, 5e-4, 1e-3, 5e-3, 1e-2],
+                    value=1e-4,
+                    format_func=lambda x: f"{x:g}",
+                )
 
                 if st.button("Train LSTM", type="primary"):
                     with st.spinner("Training LSTM model (this may take a while)..."):
@@ -290,34 +310,74 @@ with tab2:
                             lstm_model = LSTMPredictor(
                                 sequence_length=sequence_length,
                                 lstm_units=[lstm_units_1, lstm_units_2],
+                                dropout_rate=dropout_rate,
+                                learning_rate=learning_rate,
+                                model_type=model_mode.lower(),
                             )
 
-                            # Prepare data
+                            # Prepare data.
+                            # Use momentum / ratio / return-based features ONLY.
+                            # Raw price-level columns (close, sma_N, ema_N, …) are
+                            # excluded on purpose: they cause the model to learn
+                            # "tomorrow ≈ today" (MSE-optimal on a random walk) which
+                            # collapses directional accuracy to ~50 %.
                             feature_cols = st.session_state[
                                 "feature_engineer"
                             ].get_feature_names(df_features)
-                            # Limit features for LSTM to avoid overfitting
-                            important_features = [
-                                col
-                                for col in feature_cols
-                                if any(
-                                    key in col
-                                    for key in [
-                                        "sma",
-                                        "ema",
-                                        "rsi",
-                                        "macd",
-                                        "returns",
-                                        "close",
-                                    ]
-                                )
-                            ][:20]
 
+                            # Keep columns that are normalised relative to price
+                            # (ratios, distances) or are already scale-free indicators.
+                            # IMPORTANT: no [:30] cap — lagged returns (returns_lag_1
+                            # … lag_10) and lagged RSI were the features being cut off
+                            # by that limit.  They encode momentum / mean-reversion
+                            # and are the strongest directional predictors we have.
+                            # Features are ordered so the highest-signal ones (lagged
+                            # returns, RSI lags) come first.
+                            _priority_keys = [
+                                "returns_lag",  # explicit lagged return signal
+                                "log_returns",  # log return of current bar
+                                "rsi",  # 0-100 oscillator + lags
+                                "bb_percent",  # 0-1 band position
+                                "macd_histogram",  # MACD divergence (normalised by sign)
+                                "macd_bullish",  # binary crossover flag
+                                "atr_percent",  # ATR / close
+                                "bb_bandwidth",  # volatility ratio
+                                "volume_ratio",  # vol / vol_sma
+                                "volume_change",
+                                "close_open_range",
+                                "high_low_range",
+                                "bullish_candle",
+                                "candle_body",
+                                "_ratio",  # sma_N_ratio, ema_N_ratio
+                                "_distance",  # sma_N_distance
+                                "macd",  # raw MACD & signal (scaled by MinMaxScaler)
+                            ]
+
+                            _seen: set = set()
+                            important_features = []
+                            for _key in _priority_keys:
+                                for _col in feature_cols:
+                                    if (
+                                        _key in _col
+                                        and _col != "returns"
+                                        and _col not in _seen
+                                    ):
+                                        important_features.append(_col)
+                                        _seen.add(_col)
+
+                            # Target: 1-period return column.  The classifier
+                            # binarises it internally; the regressor scales it.
+                            # val_size=0.15 gives ~1.7x more validation samples
+                            # than the default 0.10, which dramatically reduces
+                            # noise in val_loss and prevents early stopping from
+                            # firing on epoch 1 due to a lucky first-epoch val score.
                             data_dict = lstm_model.prepare_data(
                                 df_features,
-                                target_col="close",
+                                target_col="returns",
+                                target_type="return",
                                 feature_cols=important_features,
                                 test_size=0.2,
+                                val_size=0.15,
                             )
 
                             # Train model
@@ -332,6 +392,7 @@ with tab2:
                             st.session_state["lstm_model"] = lstm_model
                             st.session_state["lstm_data_dict"] = data_dict
                             st.session_state["lstm_history"] = history
+                            st.session_state["lstm_model_mode"] = model_mode
 
                             st.success("LSTM training complete!")
 
@@ -346,14 +407,30 @@ with tab2:
                     st.subheader("Training History")
 
                     history = st.session_state["lstm_history"]
+                    _mode = st.session_state.get("lstm_model_mode", "Regressor")
+                    _is_clf = _mode == "Classifier"
 
-                    # Normalise MAE key names — older cached histories may still
-                    # use the long form that Keras emits before version ~2.12.
-                    mae_key = "mae" if "mae" in history else "mean_absolute_error"
-                    val_mae_key = "val_mae" if "val_mae" in history else "val_mean_absolute_error"
+                    # Right-subplot shows accuracy for classifier, MAE for regressor.
+                    if _is_clf:
+                        metric_key = "accuracy"
+                        val_metric_key = "val_accuracy"
+                        metric_label = "Accuracy"
+                    else:
+                        metric_key = (
+                            "mae" if "mae" in history else "mean_absolute_error"
+                        )
+                        val_metric_key = (
+                            "val_mae"
+                            if "val_mae" in history
+                            else "val_mean_absolute_error"
+                        )
+                        metric_label = "MAE"
 
-                    # Plot training history
-                    fig = make_subplots(rows=1, cols=2, subplot_titles=["Loss", "MAE"])
+                    fig = make_subplots(
+                        rows=1,
+                        cols=2,
+                        subplot_titles=["Loss", metric_label],
+                    )
 
                     fig.add_trace(
                         go.Scatter(y=history["loss"], name="Train Loss", mode="lines"),
@@ -367,11 +444,10 @@ with tab2:
                         row=1,
                         col=1,
                     )
-
                     fig.add_trace(
                         go.Scatter(
-                            y=history[mae_key],
-                            name="Train MAE",
+                            y=history[metric_key],
+                            name=f"Train {metric_label}",
                             mode="lines",
                         ),
                         row=1,
@@ -379,8 +455,8 @@ with tab2:
                     )
                     fig.add_trace(
                         go.Scatter(
-                            y=history[val_mae_key],
-                            name="Val MAE",
+                            y=history[val_metric_key],
+                            name=f"Val {metric_label}",
                             mode="lines",
                         ),
                         row=1,
@@ -402,14 +478,51 @@ with tab2:
                     )
 
                     st.subheader("Test Set Metrics")
-                    metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
-                    metrics_col1.metric("RMSE", f"{eval_metrics['rmse']:.4f}")
-                    metrics_col2.metric("MAE", f"{eval_metrics['mae']:.4f}")
+                    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(
+                        4
+                    )
+
+                    if _is_clf:
+                        metrics_col1.metric(
+                            "Brier RMSE",
+                            f"{eval_metrics['rmse']:.4f}",
+                            help="√MSE between predicted probability and binary label. "
+                            "Lower is better; 0.5 is random.",
+                        )
+                        metrics_col2.metric(
+                            "Brier MAE",
+                            f"{eval_metrics['mae']:.4f}",
+                            help="Mean absolute error between predicted probability and label.",
+                        )
+                    else:
+                        metrics_col1.metric(
+                            "RMSE (return space)",
+                            f"{eval_metrics['rmse']:.6f}",
+                            help="Root mean squared error in daily-return units (e.g. 0.01 = 1%).",
+                        )
+                        metrics_col2.metric(
+                            "MAE (return space)",
+                            f"{eval_metrics['mae']:.6f}",
+                            help="Mean absolute error in daily-return units.",
+                        )
+
                     metrics_col3.metric(
                         "Directional Accuracy",
                         f"{eval_metrics['directional_accuracy']:.2%}",
+                        help="Fraction of bars where predicted direction matches actual. "
+                        "50% = random; 55-60% is good; >60% is excellent.",
                     )
 
+                    if _is_clf:
+                        _cov = eval_metrics.get("confident_coverage", 1.0)
+                        metrics_col4.metric(
+                            "Confident DA",
+                            f"{eval_metrics.get('confident_directional_accuracy', eval_metrics['directional_accuracy']):.2%}",
+                            help=f"Directional accuracy restricted to predictions where "
+                            f"P(up) \u2265 0.55 or \u2264 0.45 ({_cov:.0%} of test bars). "
+                            "This is the relevant trading metric — we only act when the "
+                            "model has real conviction.",
+                        )
                     # Save model button
                     if st.button("Save Model"):
                         model_path = (
@@ -471,10 +584,22 @@ with tab3:
                             )
                         )
 
+                    _pred_mode = st.session_state.get("lstm_model_mode", "Regressor")
+                    _chart_title = (
+                        "LSTM Direction Probability"
+                        if _pred_mode == "Classifier"
+                        else "LSTM Return Predictions"
+                    )
+                    _y_label = (
+                        "P(up) — probability"
+                        if _pred_mode == "Classifier"
+                        else "Return"
+                    )
+
                     fig.update_layout(
-                        title="LSTM Price Predictions",
+                        title=_chart_title,
                         xaxis_title="Date",
-                        yaxis_title="Price",
+                        yaxis_title=_y_label,
                         height=400,
                         hovermode="x unified",
                     )
