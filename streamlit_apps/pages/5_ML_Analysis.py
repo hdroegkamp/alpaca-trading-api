@@ -79,59 +79,75 @@ with tab1:
     with col1:
         st.subheader("Data Selection")
 
-        # Symbol search input
-        symbol_input = st.text_input(
-            "Symbol",
-            value="",
-            placeholder="Type symbol (e.g., AAPL, MSFT, TSLA)",
-            help=f"{len(available_symbols)} symbols available",
-        ).upper()
-
-        # Validate symbol exists
-        if symbol_input and symbol_input not in available_symbols:
-            st.warning(
-                f"Symbol '{symbol_input}' not found in data. Available symbols: {len(available_symbols)}"
-            )
-            symbol = None
-        else:
-            symbol = symbol_input if symbol_input else None
+        # Multi-symbol selector
+        selected_symbols = st.multiselect(
+            "Symbols",
+            options=available_symbols,
+            default=[],
+            help=f"{len(available_symbols)} symbols available. "
+            "Select one or more to load and generate features.",
+            key="fe_symbol_select",
+        )
 
         timeframe = st.selectbox(
             "Timeframe", options=["1Day", "1Hour", "15Min"], index=0
         )
 
         if st.button("Load & Generate Features", type="primary"):
-            with st.spinner("Loading data and generating features..."):
-                # Load data
-                if symbol is None:
-                    st.error("Please select a symbol")
-                else:
-                    df = data_store.load(symbol, timeframe)
-
-                if df is None or len(df) == 0:
-                    st.error(f"No data found for {symbol}")
-                else:
-                    # Generate features
+            if not selected_symbols:
+                st.error("Please select at least one symbol.")
+            else:
+                with st.spinner("Loading data and generating features..."):
                     fe = FeatureEngineering()
-                    df_features = fe.generate_features(df)
+                    loaded: dict = {}
+                    progress = st.progress(0)
 
-                    # Store in session state
-                    st.session_state["feature_data"] = df_features
-                    st.session_state["feature_engineer"] = fe
-                    st.session_state["symbol"] = symbol
-                    st.session_state["timeframe"] = timeframe
+                    for idx, sym in enumerate(selected_symbols):
+                        sym_df = data_store.load(sym, timeframe)
+                        if sym_df is None or len(sym_df) == 0:
+                            st.warning(f"No data for {sym}, skipping.")
+                            continue
+                        loaded[sym] = fe.generate_features(sym_df)
+                        progress.progress(
+                            (idx + 1) / len(selected_symbols),
+                            text=f"Loaded {sym}",
+                        )
 
-                    st.success(
-                        f"Loaded {len(df_features)} rows with {len(fe.get_feature_names(df_features))} features"
-                    )
+                    if not loaded:
+                        st.error("No data loaded for any selected symbol.")
+                    else:
+                        # Store all loaded symbols
+                        st.session_state["feature_data_all"] = loaded
+                        st.session_state["feature_engineer"] = fe
+                        st.session_state["fe_symbols"] = list(loaded.keys())
+                        st.session_state["timeframe"] = timeframe
+
+                        # Set active symbol to first loaded (used by Model Training)
+                        first_sym = list(loaded.keys())[0]
+                        st.session_state["feature_data"] = loaded[first_sym]
+                        st.session_state["symbol"] = first_sym
+
+                        n_feat = len(fe.get_feature_names(loaded[first_sym]))
+                        st.success(
+                            f"Loaded {len(loaded)} symbol(s) with {n_feat} features each"
+                        )
 
     with col2:
-        if "feature_data" in st.session_state:
-            st.subheader("Feature Statistics")
+        if "feature_data_all" in st.session_state:
+            fe_syms = st.session_state.get("fe_symbols", [])
 
-            df_features = st.session_state["feature_data"]
+            # Let user pick which symbol to visualize
+            viz_sym = st.selectbox(
+                "Symbol to visualize",
+                options=fe_syms,
+                key="fe_viz_sym",
+            )
+
+            df_features = st.session_state["feature_data_all"][viz_sym]
             fe = st.session_state["feature_engineer"]
             feature_names = fe.get_feature_names(df_features)
+
+            st.subheader(f"Feature Statistics — {viz_sym}")
 
             # Feature selector
             selected_features = st.multiselect(
@@ -155,7 +171,7 @@ with tab1:
                     )
 
                 fig.update_layout(
-                    title="Feature Time Series",
+                    title=f"Feature Time Series — {viz_sym}",
                     xaxis_title="Date",
                     yaxis_title="Value",
                     height=400,
@@ -173,11 +189,27 @@ with tab1:
 with tab2:
     st.header("Model Training")
 
-    if "feature_data" not in st.session_state:
+    if "feature_data_all" not in st.session_state:
         st.info(
             "Please load data and generate features in the Feature Engineering tab first."
         )
     else:
+        # Symbol selector for training
+        _train_syms = st.session_state.get("fe_symbols", [])
+        train_symbol = st.selectbox(
+            "Symbol to train on",
+            options=_train_syms,
+            key="train_symbol_select",
+            help="Choose which loaded symbol to use for model training.",
+        )
+
+        # Update active feature data when selection changes
+        if train_symbol:
+            st.session_state["feature_data"] = st.session_state["feature_data_all"][
+                train_symbol
+            ]
+            st.session_state["symbol"] = train_symbol
+
         model_type = st.radio(
             "Select Model Type", options=["Random Forest", "LSTM"], horizontal=True
         )
@@ -186,44 +218,137 @@ with tab2:
 
         if model_type == "Random Forest":
             with col1:
-                st.subheader("Random Forest Configuration")
+                st.subheader("Tree Model Configuration")
 
-                n_estimators = st.slider("Number of Trees", 50, 500, 200, 50)
-                max_depth = st.slider("Max Depth", 5, 30, 15, 5)
+                tree_model_type = st.radio(
+                    "Model Backend",
+                    options=["Random Forest", "Gradient Boosting"],
+                    horizontal=True,
+                    help="Gradient Boosting uses early stopping and often "
+                    "generalizes better on noisy financial data.",
+                )
+
+                n_estimators = st.slider("Number of Trees", 50, 500, 300, 50)
+                max_depth = st.slider("Max Depth", 3, 20, 5, 1)
                 test_size = st.slider("Test Size", 0.1, 0.3, 0.2, 0.05)
                 forward_periods = st.slider("Prediction Horizon (periods)", 1, 10, 1)
+                return_threshold = (
+                    st.slider(
+                        "Return Threshold (%)",
+                        0.0,
+                        5.0,
+                        1.0,
+                        0.25,
+                        help="Drop rows where the forward return is within ±threshold "
+                        "of zero. Removes ambiguous / noisy labels.",
+                    )
+                    / 100.0
+                )
 
-                if st.button("Train Random Forest", type="primary"):
-                    with st.spinner("Training Random Forest model..."):
-                        try:
-                            df_features = st.session_state["feature_data"]
-                            fe = st.session_state["feature_engineer"]
+                # Feature selection
+                st.subheader("Feature Selection")
+                fe = st.session_state["feature_engineer"]
+                df_features = st.session_state["feature_data"]
+                all_rf_features = fe.get_feature_names(df_features)
 
-                            # Prepare data for classification
-                            df_ml = fe.prepare_for_ml(
-                                df_features, forward_periods=forward_periods
-                            )
+                # Rank features by absolute correlation with target
+                # and default to the top 3
+                try:
+                    df_ml_preview = fe.prepare_for_ml(
+                        df_features,
+                        forward_periods=forward_periods,
+                        return_threshold=return_threshold,
+                    )
+                    _target_corr = (
+                        df_ml_preview[all_rf_features]
+                        .corrwith(df_ml_preview["target"])
+                        .abs()
+                        .sort_values(ascending=False)
+                    )
+                    default_rf_features = _target_corr.head(3).index.tolist()
+                except Exception:
+                    default_rf_features = all_rf_features[:3]
 
-                            # Initialize and train model
-                            rf_model = RandomForestAnalyzer(
-                                n_estimators=n_estimators, max_depth=max_depth
-                            )
+                rf_selected_features = st.multiselect(
+                    "Features to use",
+                    options=all_rf_features,
+                    default=default_rf_features,
+                    help=f"{len(all_rf_features)} total features available. "
+                    "Defaults are the top 3 by absolute correlation with the target.",
+                    key="rf_feature_select",
+                )
 
-                            data_dict = rf_model.prepare_data(
-                                df_ml, target_col="target", test_size=test_size
-                            )
+                if st.button("Train Model", type="primary"):
+                    if not rf_selected_features:
+                        st.error("Please select at least one feature.")
+                    else:
+                        with st.spinner("Training model..."):
+                            try:
+                                df_features = st.session_state["feature_data"]
+                                fe = st.session_state["feature_engineer"]
 
-                            metrics = rf_model.train(data_dict, verbose=True)
+                                # Prepare data for classification
+                                df_ml = fe.prepare_for_ml(
+                                    df_features,
+                                    forward_periods=forward_periods,
+                                    return_threshold=return_threshold,
+                                )
 
-                            # Store in session state
-                            st.session_state["rf_model"] = rf_model
-                            st.session_state["rf_data_dict"] = data_dict
-                            st.session_state["rf_metrics"] = metrics
+                                feature_cols = [
+                                    f
+                                    for f in rf_selected_features
+                                    if f in df_ml.columns
+                                ]
 
-                            st.success("Random Forest training complete!")
+                                st.info(f"Using {len(feature_cols)} selected features")
 
-                        except Exception as e:
-                            st.error(f"Training failed: {e}")
+                                # Initialize and train model
+                                rf_model = RandomForestAnalyzer(
+                                    n_estimators=n_estimators,
+                                    max_depth=max_depth,
+                                    model_type=(
+                                        "gbm"
+                                        if tree_model_type == "Gradient Boosting"
+                                        else "rf"
+                                    ),
+                                )
+
+                                data_dict = rf_model.prepare_data(
+                                    df_ml,
+                                    target_col="target",
+                                    feature_cols=feature_cols,
+                                    test_size=test_size,
+                                    forward_periods=forward_periods,
+                                )
+
+                                metrics = rf_model.train(data_dict, verbose=True)
+
+                                # Calibrate probabilities on validation set
+                                rf_model.calibrate(data_dict)
+
+                                # Walk-forward validation for robust estimate
+                                wf_results = rf_model.walk_forward_validate(
+                                    df_ml,
+                                    feature_cols=feature_cols,
+                                    target_col="target",
+                                    n_splits=5,
+                                    forward_periods=forward_periods,
+                                )
+
+                                # Store in session state
+                                st.session_state["rf_model"] = rf_model
+                                st.session_state["rf_data_dict"] = data_dict
+                                st.session_state["rf_metrics"] = metrics
+                                st.session_state["rf_wf_results"] = wf_results
+
+                                st.success("Random Forest training complete!")
+
+                            except Exception as e:
+                                st.error(f"Training failed: {e}")
+                                import traceback
+
+                                st.code(traceback.format_exc())
+                        # end with spinner (indentation close for the else branch)
 
             with col2:
                 if "rf_metrics" in st.session_state:
@@ -236,6 +361,31 @@ with tab2:
                     st.dataframe(
                         metrics_df.style.format("{:.4f}"), use_container_width=True
                     )
+
+                    # Walk-forward results
+                    if "rf_wf_results" in st.session_state:
+                        wf = st.session_state["rf_wf_results"]
+                        st.subheader("Walk-Forward Validation")
+                        wf_df = pd.DataFrame(wf["fold_metrics"])
+                        st.dataframe(
+                            wf_df[
+                                ["fold", "accuracy", "precision", "recall", "f1_score"]
+                            ].style.format(
+                                {
+                                    "accuracy": "{:.4f}",
+                                    "precision": "{:.4f}",
+                                    "recall": "{:.4f}",
+                                    "f1_score": "{:.4f}",
+                                }
+                            ),
+                            use_container_width=True,
+                        )
+                        avg = wf["mean"]
+                        std = wf["std"]
+                        st.markdown(
+                            f"**Mean Accuracy: {avg['accuracy']:.4f} "
+                            f"± {std['accuracy_std']:.4f}**"
+                        )
 
                     # Visualize metrics
                     fig = go.Figure()
@@ -301,106 +451,101 @@ with tab2:
                     format_func=lambda x: f"{x:g}",
                 )
 
+                # Feature selection
+                st.subheader("Feature Selection")
+                _fe = st.session_state["feature_engineer"]
+                _df_feat = st.session_state["feature_data"]
+                _all_lstm_features = _fe.get_feature_names(_df_feat)
+
+                # Build recommended defaults using priority ordering
+                _priority_keys = [
+                    "returns_lag",
+                    "log_returns",
+                    "rsi",
+                    "bb_percent",
+                    "macd_histogram",
+                    "macd_bullish",
+                    "atr_percent",
+                    "bb_bandwidth",
+                    "volume_ratio",
+                    "volume_change",
+                    "close_open_range",
+                    "high_low_range",
+                    "bullish_candle",
+                    "candle_body",
+                    "_ratio",
+                    "_distance",
+                    "macd",
+                ]
+                _seen: set = set()
+                _default_lstm_features = []
+                for _key in _priority_keys:
+                    for _col in _all_lstm_features:
+                        if _key in _col and _col != "returns" and _col not in _seen:
+                            _default_lstm_features.append(_col)
+                            _seen.add(_col)
+
+                lstm_selected_features = st.multiselect(
+                    "Features to use",
+                    options=_all_lstm_features,
+                    default=_default_lstm_features[:3],
+                    help=f"{len(_all_lstm_features)} total features available. "
+                    "Defaults are the top 3 momentum / scale-free features.",
+                    key="lstm_feature_select",
+                )
+
                 if st.button("Train LSTM", type="primary"):
-                    with st.spinner("Training LSTM model (this may take a while)..."):
-                        try:
-                            df_features = st.session_state["feature_data"]
+                    if not lstm_selected_features:
+                        st.error("Please select at least one feature.")
+                    else:
+                        with st.spinner(
+                            "Training LSTM model (this may take a while)..."
+                        ):
+                            try:
+                                df_features = st.session_state["feature_data"]
 
-                            # Initialize LSTM
-                            lstm_model = LSTMPredictor(
-                                sequence_length=sequence_length,
-                                lstm_units=[lstm_units_1, lstm_units_2],
-                                dropout_rate=dropout_rate,
-                                learning_rate=learning_rate,
-                                model_type=model_mode.lower(),
-                            )
+                                # Initialize LSTM
+                                lstm_model = LSTMPredictor(
+                                    sequence_length=sequence_length,
+                                    lstm_units=[lstm_units_1, lstm_units_2],
+                                    dropout_rate=dropout_rate,
+                                    learning_rate=learning_rate,
+                                    model_type=model_mode.lower(),
+                                )
 
-                            # Prepare data.
-                            # Use momentum / ratio / return-based features ONLY.
-                            # Raw price-level columns (close, sma_N, ema_N, …) are
-                            # excluded on purpose: they cause the model to learn
-                            # "tomorrow ≈ today" (MSE-optimal on a random walk) which
-                            # collapses directional accuracy to ~50 %.
-                            feature_cols = st.session_state[
-                                "feature_engineer"
-                            ].get_feature_names(df_features)
+                                important_features = lstm_selected_features
 
-                            # Keep columns that are normalised relative to price
-                            # (ratios, distances) or are already scale-free indicators.
-                            # IMPORTANT: no [:30] cap — lagged returns (returns_lag_1
-                            # … lag_10) and lagged RSI were the features being cut off
-                            # by that limit.  They encode momentum / mean-reversion
-                            # and are the strongest directional predictors we have.
-                            # Features are ordered so the highest-signal ones (lagged
-                            # returns, RSI lags) come first.
-                            _priority_keys = [
-                                "returns_lag",  # explicit lagged return signal
-                                "log_returns",  # log return of current bar
-                                "rsi",  # 0-100 oscillator + lags
-                                "bb_percent",  # 0-1 band position
-                                "macd_histogram",  # MACD divergence (normalised by sign)
-                                "macd_bullish",  # binary crossover flag
-                                "atr_percent",  # ATR / close
-                                "bb_bandwidth",  # volatility ratio
-                                "volume_ratio",  # vol / vol_sma
-                                "volume_change",
-                                "close_open_range",
-                                "high_low_range",
-                                "bullish_candle",
-                                "candle_body",
-                                "_ratio",  # sma_N_ratio, ema_N_ratio
-                                "_distance",  # sma_N_distance
-                                "macd",  # raw MACD & signal (scaled by MinMaxScaler)
-                            ]
+                                data_dict = lstm_model.prepare_data(
+                                    df_features,
+                                    target_col="returns",
+                                    target_type="return",
+                                    feature_cols=important_features,
+                                    test_size=0.2,
+                                    val_size=0.15,
+                                )
 
-                            _seen: set = set()
-                            important_features = []
-                            for _key in _priority_keys:
-                                for _col in feature_cols:
-                                    if (
-                                        _key in _col
-                                        and _col != "returns"
-                                        and _col not in _seen
-                                    ):
-                                        important_features.append(_col)
-                                        _seen.add(_col)
+                                # Train model
+                                history = lstm_model.train(
+                                    data_dict,
+                                    epochs=epochs,
+                                    batch_size=batch_size,
+                                    verbose=0,
+                                )
 
-                            # Target: 1-period return column.  The classifier
-                            # binarises it internally; the regressor scales it.
-                            # val_size=0.15 gives ~1.7x more validation samples
-                            # than the default 0.10, which dramatically reduces
-                            # noise in val_loss and prevents early stopping from
-                            # firing on epoch 1 due to a lucky first-epoch val score.
-                            data_dict = lstm_model.prepare_data(
-                                df_features,
-                                target_col="returns",
-                                target_type="return",
-                                feature_cols=important_features,
-                                test_size=0.2,
-                                val_size=0.15,
-                            )
+                                # Store in session state
+                                st.session_state["lstm_model"] = lstm_model
+                                st.session_state["lstm_data_dict"] = data_dict
+                                st.session_state["lstm_history"] = history
+                                st.session_state["lstm_model_mode"] = model_mode
 
-                            # Train model
-                            history = lstm_model.train(
-                                data_dict,
-                                epochs=epochs,
-                                batch_size=batch_size,
-                                verbose=0,
-                            )
+                                st.success("LSTM training complete!")
 
-                            # Store in session state
-                            st.session_state["lstm_model"] = lstm_model
-                            st.session_state["lstm_data_dict"] = data_dict
-                            st.session_state["lstm_history"] = history
-                            st.session_state["lstm_model_mode"] = model_mode
+                            except Exception as e:
+                                st.error(f"Training failed: {e}")
+                                import traceback
 
-                            st.success("LSTM training complete!")
-
-                        except Exception as e:
-                            st.error(f"Training failed: {e}")
-                            import traceback
-
-                            st.code(traceback.format_exc())
+                                st.code(traceback.format_exc())
+                    # end with spinner (indentation close for the else branch)
 
             with col2:
                 if "lstm_history" in st.session_state:
@@ -716,150 +861,284 @@ with tab4:
         col1, col2 = st.columns([1, 2])
 
         with col1:
+            # Symbol selection
+            current_symbol = st.session_state.get("symbol", "")
+            bt_symbols = st.multiselect(
+                "Symbols to backtest",
+                options=available_symbols,
+                default=[current_symbol] if current_symbol in available_symbols else [],
+                help="Select one or more symbols. Each strategy will be backtested "
+                "on every symbol independently.",
+                key="bt_symbol_select",
+            )
+
+            bt_timeframe = st.session_state.get("timeframe", "1Day")
+
             initial_capital = st.number_input(
                 "Initial Capital", value=100000, step=10000
             )
             commission = st.number_input("Commission (%)", value=0.1, step=0.05) / 100
 
             if st.button("Run Backtest Comparison", type="primary"):
-                with st.spinner("Running backtests..."):
-                    try:
-                        df = st.session_state["feature_data"]
-                        fe = st.session_state["feature_engineer"]
+                if not bt_symbols:
+                    st.error("Please select at least one symbol.")
+                else:
+                    with st.spinner("Running backtests..."):
+                        try:
+                            fe = st.session_state["feature_engineer"]
 
-                        results = {}
+                            # Collect per-symbol results
+                            # all_results: {symbol: {strategy_name: {equity, returns, metrics}}}
+                            all_results: dict = {}
+                            progress = st.progress(0)
 
-                        # Benchmark: Buy and Hold
-                        st.write("Running Buy & Hold benchmark...")
-                        benchmark_returns = df["close"].pct_change().fillna(0)
-                        results["Buy & Hold"] = {
-                            "returns": benchmark_returns,
-                            "equity": (1 + benchmark_returns).cumprod()
-                            * initial_capital,
-                        }
+                            for sym_idx, sym in enumerate(bt_symbols):
+                                st.write(f"**{sym}** — loading data...")
+                                sym_df = data_store.load(sym, bt_timeframe)
+                                if sym_df is None or len(sym_df) == 0:
+                                    st.warning(f"No data for {sym}, skipping.")
+                                    continue
 
-                        # Traditional strategy: Moving Average Crossover
-                        st.write("Running Moving Average Crossover...")
-                        ma_strategy = MovingAverageCrossover(
-                            fast_window=50, slow_window=200
-                        )
-                        ma_signals = ma_strategy.generate_signals(df)
+                                sym_features = fe.generate_features(sym_df)
+                                sym_results: dict = {}
 
-                        backtest_ma = VectorizedBacktest(
-                            strategy=ma_strategy,
-                            data=df,
-                            initial_capital=initial_capital,
-                            commission=commission,
-                        )
-                        ma_result = backtest_ma.run()
-                        results["MA Crossover"] = {
-                            "returns": ma_result["strategy_return"],
-                            "equity": ma_result["equity"],
-                            "metrics": ma_result,
-                        }
+                                # Buy & Hold
+                                bh_ret = sym_features["close"].pct_change().fillna(0)
+                                sym_results["Buy & Hold"] = {
+                                    "returns": bh_ret,
+                                    "equity": (1 + bh_ret).cumprod() * initial_capital,
+                                }
 
-                        # ML strategies
-                        if "rf_model" in st.session_state:
-                            st.write("Running Random Forest strategy...")
-                            rf_strategy = RandomForestStrategy(
-                                rf_model=st.session_state["rf_model"],
-                                feature_engineer=fe,
-                                confidence_threshold=0.6,
+                                # MA Crossover
+                                ma_strategy = MovingAverageCrossover(
+                                    fast_window=50, slow_window=200
+                                )
+                                backtest_ma = VectorizedBacktest(
+                                    strategy=ma_strategy,
+                                    data=sym_features,
+                                    initial_capital=initial_capital,
+                                    commission=commission,
+                                )
+                                ma_result = backtest_ma.run()
+                                sym_results["MA Crossover"] = {
+                                    "returns": ma_result["strategy_return"],
+                                    "equity": ma_result["equity"],
+                                    "metrics": backtest_ma.get_summary(),
+                                }
+
+                                # Random Forest
+                                if "rf_model" in st.session_state:
+                                    rf_strategy = RandomForestStrategy(
+                                        rf_model=st.session_state["rf_model"],
+                                        feature_engineer=fe,
+                                        confidence_threshold=0.6,
+                                    )
+                                    backtest_rf = VectorizedBacktest(
+                                        strategy=rf_strategy,
+                                        data=sym_features,
+                                        initial_capital=initial_capital,
+                                        commission=commission,
+                                    )
+                                    rf_result = backtest_rf.run()
+                                    sym_results["Random Forest"] = {
+                                        "returns": rf_result["strategy_return"],
+                                        "equity": rf_result["equity"],
+                                        "metrics": backtest_rf.get_summary(),
+                                    }
+
+                                # LSTM
+                                if "lstm_model" in st.session_state:
+                                    lstm_strategy = LSTMStrategy(
+                                        lstm_model=st.session_state["lstm_model"],
+                                        feature_engineer=fe,
+                                        confidence_threshold=0.02,
+                                    )
+                                    backtest_lstm = VectorizedBacktest(
+                                        strategy=lstm_strategy,
+                                        data=sym_features,
+                                        initial_capital=initial_capital,
+                                        commission=commission,
+                                    )
+                                    lstm_result = backtest_lstm.run()
+                                    sym_results["LSTM"] = {
+                                        "returns": lstm_result["strategy_return"],
+                                        "equity": lstm_result["equity"],
+                                        "metrics": backtest_lstm.get_summary(),
+                                    }
+
+                                all_results[sym] = sym_results
+                                progress.progress(
+                                    (sym_idx + 1) / len(bt_symbols),
+                                    text=f"Completed {sym}",
+                                )
+
+                            st.session_state["backtest_results"] = all_results
+                            st.session_state["backtest_symbols"] = list(
+                                all_results.keys()
+                            )
+                            st.success(
+                                f"Backtests complete for {len(all_results)} symbol(s)!"
                             )
 
-                            backtest_rf = VectorizedBacktest(
-                                strategy=rf_strategy,
-                                data=df,
-                                initial_capital=initial_capital,
-                                commission=commission,
-                            )
-                            rf_result = backtest_rf.run()
-                            results["Random Forest"] = {
-                                "returns": rf_result["strategy_return"],
-                                "equity": rf_result["equity"],
-                                "metrics": rf_result,
-                            }
+                        except Exception as e:
+                            st.error(f"Backtest failed: {e}")
+                            import traceback
 
-                        if "lstm_model" in st.session_state:
-                            st.write("Running LSTM strategy...")
-                            lstm_strategy = LSTMStrategy(
-                                lstm_model=st.session_state["lstm_model"],
-                                feature_engineer=fe,
-                                confidence_threshold=0.02,
-                            )
-
-                            backtest_lstm = VectorizedBacktest(
-                                strategy=lstm_strategy,
-                                data=df,
-                                initial_capital=initial_capital,
-                                commission=commission,
-                            )
-                            lstm_result = backtest_lstm.run()
-                            results["LSTM"] = {
-                                "returns": lstm_result["strategy_return"],
-                                "equity": lstm_result["equity"],
-                                "metrics": lstm_result,
-                            }
-
-                        st.session_state["backtest_results"] = results
-                        st.success("Backtests complete!")
-
-                    except Exception as e:
-                        st.error(f"Backtest failed: {e}")
-                        import traceback
-
-                        st.code(traceback.format_exc())
+                            st.code(traceback.format_exc())
 
         with col2:
             if "backtest_results" in st.session_state:
-                results = st.session_state["backtest_results"]
+                all_results = st.session_state["backtest_results"]
+                bt_syms = st.session_state.get("backtest_symbols", [])
 
-                # Plot equity curves
-                fig = go.Figure()
+                if len(bt_syms) == 0:
+                    st.info("No results to display.")
+                elif len(bt_syms) == 1:
+                    # ---- Single-symbol view (same as before) ----
+                    sym = bt_syms[0]
+                    results = all_results[sym]
 
-                for strategy_name, result in results.items():
-                    fig.add_trace(
-                        go.Scatter(
-                            x=result["equity"].index,
-                            y=result["equity"],
-                            name=strategy_name,
-                            mode="lines",
+                    fig = go.Figure()
+                    for strategy_name, result in results.items():
+                        fig.add_trace(
+                            go.Scatter(
+                                x=result["equity"].index,
+                                y=result["equity"],
+                                name=strategy_name,
+                                mode="lines",
+                            )
                         )
+                    fig.update_layout(
+                        title=f"Equity Curves — {sym}",
+                        xaxis_title="Date",
+                        yaxis_title="Portfolio Value ($)",
+                        height=400,
+                        hovermode="x unified",
                     )
+                    st.plotly_chart(fig, width="stretch")
 
-                fig.update_layout(
-                    title="Strategy Equity Curves",
-                    xaxis_title="Date",
-                    yaxis_title="Portfolio Value ($)",
-                    height=400,
-                    hovermode="x unified",
-                )
-
-                st.plotly_chart(fig, width="stretch")
-
-                # Performance metrics comparison
-                st.subheader("Performance Metrics")
-
-                metrics_comparison = []
-                for strategy_name, result in results.items():
-                    if "metrics" in result:
-                        metrics = result["metrics"]
-                        metrics_comparison.append(
-                            {
-                                "Strategy": strategy_name,
-                                "Total Return": f"{metrics.get('total_return', 0):.2%}",
-                                "Sharpe Ratio": f"{metrics.get('sharpe_ratio', 0):.3f}",
-                                "Max Drawdown": f"{metrics.get('max_drawdown', 0):.2%}",
-                                "Win Rate": f"{metrics.get('win_rate', 0):.2%}",
-                                "Trades": metrics.get("n_trades", 0),
-                            }
+                    st.subheader("Performance Metrics")
+                    metrics_comparison = []
+                    for strategy_name, result in results.items():
+                        if "metrics" in result:
+                            m = result["metrics"]
+                            metrics_comparison.append(
+                                {
+                                    "Strategy": strategy_name,
+                                    "Total Return": f"{m.get('total_return', 0):.2%}",
+                                    "Sharpe Ratio": f"{m.get('sharpe_ratio', 0):.3f}",
+                                    "Max Drawdown": f"{m.get('max_drawdown', 0):.2%}",
+                                    "Win Rate": f"{m.get('win_rate', 0):.2%}",
+                                    "Trades": m.get("n_trades", 0),
+                                }
+                            )
+                    if metrics_comparison:
+                        st.dataframe(
+                            pd.DataFrame(metrics_comparison),
+                            use_container_width=True,
+                            hide_index=True,
                         )
 
-                if metrics_comparison:
-                    comparison_df = pd.DataFrame(metrics_comparison)
-                    st.dataframe(
-                        comparison_df, use_container_width=True, hide_index=True
+                else:
+                    # ---- Multi-symbol view ----
+                    # Per-symbol detail selector
+                    detail_sym = st.selectbox(
+                        "View equity curves for",
+                        options=bt_syms,
+                        key="bt_detail_sym",
                     )
+                    results = all_results[detail_sym]
+
+                    fig = go.Figure()
+                    for strategy_name, result in results.items():
+                        fig.add_trace(
+                            go.Scatter(
+                                x=result["equity"].index,
+                                y=result["equity"],
+                                name=strategy_name,
+                                mode="lines",
+                            )
+                        )
+                    fig.update_layout(
+                        title=f"Equity Curves — {detail_sym}",
+                        xaxis_title="Date",
+                        yaxis_title="Portfolio Value ($)",
+                        height=400,
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig, width="stretch")
+
+                    # Per-symbol metrics table
+                    st.subheader("Per-Symbol Metrics")
+                    _metric_keys = [
+                        "total_return",
+                        "sharpe_ratio",
+                        "max_drawdown",
+                        "win_rate",
+                        "n_trades",
+                    ]
+                    per_sym_rows = []
+                    for sym in bt_syms:
+                        for strat_name, res in all_results[sym].items():
+                            if "metrics" not in res:
+                                continue
+                            m = res["metrics"]
+                            per_sym_rows.append(
+                                {
+                                    "Symbol": sym,
+                                    "Strategy": strat_name,
+                                    "Total Return": m.get("total_return", 0),
+                                    "Sharpe Ratio": m.get("sharpe_ratio", 0),
+                                    "Max Drawdown": m.get("max_drawdown", 0),
+                                    "Win Rate": m.get("win_rate", 0),
+                                    "Trades": m.get("n_trades", 0),
+                                }
+                            )
+
+                    if per_sym_rows:
+                        per_sym_df = pd.DataFrame(per_sym_rows)
+                        st.dataframe(
+                            per_sym_df.style.format(
+                                {
+                                    "Total Return": "{:.2%}",
+                                    "Sharpe Ratio": "{:.3f}",
+                                    "Max Drawdown": "{:.2%}",
+                                    "Win Rate": "{:.2%}",
+                                    "Trades": "{:.0f}",
+                                }
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        # Aggregated averages across symbols
+                        st.subheader("Average Across Symbols")
+                        avg_df = (
+                            per_sym_df.groupby("Strategy")[
+                                [
+                                    "Total Return",
+                                    "Sharpe Ratio",
+                                    "Max Drawdown",
+                                    "Win Rate",
+                                    "Trades",
+                                ]
+                            ]
+                            .mean()
+                            .reset_index()
+                        )
+                        st.dataframe(
+                            avg_df.style.format(
+                                {
+                                    "Total Return": "{:.2%}",
+                                    "Sharpe Ratio": "{:.3f}",
+                                    "Max Drawdown": "{:.2%}",
+                                    "Win Rate": "{:.2%}",
+                                    "Trades": "{:.0f}",
+                                }
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
 st.markdown("---")
 st.caption("ML Analysis Tool - Algorithmic Trading Platform")

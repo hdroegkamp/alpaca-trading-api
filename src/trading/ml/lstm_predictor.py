@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 from typing import Tuple, Optional, Dict, Any, List
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
 import pickle
 import os
 
@@ -194,11 +193,8 @@ class LSTMPredictor:
         cols_needed = list(dict.fromkeys(feature_cols + [target_col]))
         df = df[cols_needed].replace([np.inf, -np.inf], np.nan).dropna()
 
-        # Extract features and target
+        # Extract raw features and targets before any scaling or sequencing.
         features = df[feature_cols].values
-
-        # Scale features
-        features_scaled = self.scaler.fit_transform(features)
 
         if self.model_type == "classifier":
             # Binarise: 1 if the return for this bar is positive, else 0.
@@ -206,26 +202,52 @@ class LSTMPredictor:
             # is whether the next day closes up.
             col_values = np.asarray(df[target_col].values, dtype=np.float64)
             target = (col_values > 0).astype(np.float32).reshape(-1, 1)
-            target_scaled = target  # already 0/1 — no scaler needed
         else:
             target = np.asarray(df[target_col].values, dtype=np.float64).reshape(-1, 1)
+
+        # Chronological split on raw arrays before fitting any scaler.
+        # Using sequence_length as the gap ensures no training sequence
+        # reaches into the test window.
+        n_raw = len(features)
+        test_split = int(n_raw * (1 - test_size))
+        seq_gap = self.sequence_length
+
+        features_train_raw = features[: test_split - seq_gap]
+        features_test_raw = features[test_split:]
+        target_train_raw = target[: test_split - seq_gap]
+        target_test_raw = target[test_split:]
+
+        # Fit scaler on training data only; apply same transform to test.
+        features_train_scaled = self.scaler.fit_transform(features_train_raw)
+        features_test_scaled = self.scaler.transform(features_test_raw)
+
+        if self.model_type == "classifier":
+            target_train_scaled = target_train_raw  # already 0/1 — no scaler needed
+            target_test_scaled = target_test_raw
+        else:
             # Scale target — prevents exploding gradients from raw magnitudes
-            target_scaled = self.target_scaler.fit_transform(target)
+            target_train_scaled = self.target_scaler.fit_transform(target_train_raw)
+            target_test_scaled = self.target_scaler.transform(target_test_raw)
 
-        # Create sequences
-        X, y = self.create_sequences(features_scaled, target_scaled)
-
-        # Split into train/val/test
-        # First split: separate test set
-        X_temp, X_test, y_temp, y_test = train_test_split(
-            X, y, test_size=test_size, shuffle=False
+        # Create sequences for each partition separately so no sequence spans
+        # the train/test boundary.
+        X_all_train, y_all_train_opt = self.create_sequences(
+            features_train_scaled, target_train_scaled
+        )
+        X_test, y_test_opt = self.create_sequences(
+            features_test_scaled, target_test_scaled
         )
 
-        # Second split: separate train and val
+        # target is always supplied above so y will never be None
+        assert y_all_train_opt is not None and y_test_opt is not None
+        y_all_train = y_all_train_opt
+        y_test = y_test_opt
+
+        # Chronological val split within training sequences
         val_ratio = val_size / (1 - test_size)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_temp, y_temp, test_size=val_ratio, shuffle=False
-        )
+        val_split = len(X_all_train) - int(len(X_all_train) * val_ratio)
+        X_train, X_val = X_all_train[:val_split], X_all_train[val_split:]
+        y_train, y_val = y_all_train[:val_split], y_all_train[val_split:]
 
         return {
             "X_train": X_train,
