@@ -1,6 +1,20 @@
-"""Feature engineering for ML-based trading strategies.
+"""Feature engineering for the naive Random Forest baseline.
 
-Extracts technical indicators and derived features from OHLCV data.
+Extracts a small, curated set of *stationary* technical features from OHLCV
+data. The goal is a compact, explainable feature set that is easy to test and
+does not leak future information.
+
+The 10 baseline features (all stationary — no raw price/volume levels):
+    momentum_5d      5-day cumulative return
+    momentum_20d     20-day cumulative return
+    rsi              14-period Relative Strength Index
+    macd_signal_pct  MACD signal line normalised by close
+    bb_percent       position of close within Bollinger Bands (%B)
+    bb_bandwidth     Bollinger Band width relative to the middle band
+    atr_percent      Average True Range as a fraction of close
+    volatility_20d   annualised realised volatility, 20-day window
+    volatility_60d   annualised realised volatility, 60-day window
+    vwap_ratio       close divided by rolling VWAP
 """
 
 import pandas as pd
@@ -9,344 +23,140 @@ from typing import List, Optional, Dict, Any
 
 
 class FeatureEngineering:
-    """Extract technical indicators and features from price data."""
+    """Extract a curated set of stationary technical features from price data."""
+
+    #: The fixed baseline feature set produced by :meth:`generate_features`.
+    FEATURE_COLUMNS: List[str] = [
+        "momentum_5d",
+        "momentum_20d",
+        "rsi",
+        "macd_signal_pct",
+        "bb_percent",
+        "bb_bandwidth",
+        "atr_percent",
+        "volatility_20d",
+        "volatility_60d",
+        "vwap_ratio",
+    ]
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """Initialize feature engineering.
 
         Args:
-            config: Configuration dict with feature parameters
-                - sma_periods: List of SMA window sizes
-                - ema_periods: List of EMA window sizes
-                - rsi_period: RSI lookback period
-                - macd_config: MACD parameters (fast, slow, signal)
-                - bb_period: Bollinger Bands period
-                - bb_std: Bollinger Bands standard deviations
+            config: Optional overrides for indicator parameters:
+                - rsi_period (default 14)
+                - macd_fast / macd_slow / macd_signal (default 12 / 26 / 9)
+                - bb_period / bb_std (default 20 / 2.0)
+                - atr_period (default 14)
+                - vwap_period (default 20)
         """
-        self.config = config or self._default_config()
-        # Columns that are raw price / volume levels (non-stationary) or
-        # intermediate building blocks.  They must NOT be used as ML features
-        # because their absolute values drift over time and cause overfitting.
-        self._non_stationary_cols: set = set()
+        self.config = {**self._default_config(), **(config or {})}
 
     def _default_config(self) -> Dict[str, Any]:
-        """Default feature configuration."""
         return {
-            "sma_periods": [10, 20, 50, 100, 200],
-            "ema_periods": [9, 12, 20, 26, 50],
             "rsi_period": 14,
-            "macd_config": {"fast": 12, "slow": 26, "signal": 9},
+            "macd_fast": 12,
+            "macd_slow": 26,
+            "macd_signal": 9,
             "bb_period": 20,
             "bb_std": 2.0,
-            "volume_sma_period": 20,
+            "atr_period": 14,
+            "vwap_period": 20,
         }
 
     def generate_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Generate all technical indicator features.
+        """Generate the 10 baseline features from OHLCV data.
 
         Args:
-            df: DataFrame with OHLCV columns (open, high, low, close, volume)
+            df: DataFrame with columns open, high, low, close, volume.
 
         Returns:
-            DataFrame with original data plus all technical features
+            Copy of ``df`` with the baseline feature columns appended.
         """
         result = df.copy()
+        cfg = self.config
 
-        # Price-based features
-        result = self._add_price_features(result)
+        returns = result["close"].pct_change()
 
-        # Moving averages
-        result = self._add_sma_features(result)
-        result = self._add_ema_features(result)
+        # Momentum (cumulative returns over horizon)
+        result["momentum_5d"] = result["close"].pct_change(periods=5)
+        result["momentum_20d"] = result["close"].pct_change(periods=20)
 
-        # Momentum indicators
-        result = self._add_rsi(result)
-        result = self._add_macd(result)
+        # RSI
+        result["rsi"] = self._rsi(result["close"], cfg["rsi_period"])
 
-        # Volatility indicators
-        result = self._add_bollinger_bands(result)
-        result = self._add_atr(result)
+        # MACD signal line, normalised by price (stationary)
+        ema_fast = result["close"].ewm(span=cfg["macd_fast"], adjust=False).mean()
+        ema_slow = result["close"].ewm(span=cfg["macd_slow"], adjust=False).mean()
+        macd = ema_fast - ema_slow
+        macd_signal = macd.ewm(span=cfg["macd_signal"], adjust=False).mean()
+        result["macd_signal_pct"] = macd_signal / result["close"]
 
-        # Volume indicators
-        result = self._add_volume_features(result)
+        # Bollinger Bands: %B and bandwidth (both stationary)
+        bb_mid = result["close"].rolling(window=cfg["bb_period"]).mean()
+        bb_std = result["close"].rolling(window=cfg["bb_period"]).std()
+        bb_upper = bb_mid + cfg["bb_std"] * bb_std
+        bb_lower = bb_mid - cfg["bb_std"] * bb_std
+        band_range = (bb_upper - bb_lower).replace(0, np.nan)
+        result["bb_percent"] = (result["close"] - bb_lower) / band_range
+        result["bb_bandwidth"] = (bb_upper - bb_lower) / bb_mid
 
-        # Price patterns
-        result = self._add_pattern_features(result)
+        # ATR as a fraction of price
+        result["atr_percent"] = self._atr(result, cfg["atr_period"]) / result["close"]
 
-        # Lagged features
-        result = self._add_lagged_features(result)
+        # Annualised realised volatility at two horizons
+        result["volatility_20d"] = returns.rolling(window=20).std() * np.sqrt(252)
+        result["volatility_60d"] = returns.rolling(window=60).std() * np.sqrt(252)
 
-        # Multi-horizon momentum and volatility features
-        result = self._add_momentum_features(result)
+        # Close relative to rolling VWAP (stationary; uses a rolling, not
+        # cumulative, window to avoid drift over long histories)
+        result["vwap_ratio"] = self._vwap_ratio(result, cfg["vwap_period"])
 
         return result
 
-    def _add_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add basic price-based features."""
-        # Returns
-        df["returns"] = df["close"].pct_change()
-        df["log_returns"] = np.log(df["close"] / df["close"].shift(1))
-
-        # Price ranges
-        df["high_low_range"] = (df["high"] - df["low"]) / df["close"]
-        df["close_open_range"] = (df["close"] - df["open"]) / df["open"]
-
-        # Typical price (intermediate — used by VWAP, not a direct feature)
-        df["typical_price"] = (df["high"] + df["low"] + df["close"]) / 3
-        self._non_stationary_cols.add("typical_price")
-
-        return df
-
-    def _add_sma_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add Simple Moving Average features."""
-        for period in self.config["sma_periods"]:
-            col_name = f"sma_{period}"
-            df[col_name] = df["close"].rolling(window=period).mean()
-            self._non_stationary_cols.add(col_name)
-
-            # Price relative to SMA
-            df[f"{col_name}_ratio"] = df["close"] / df[col_name]
-
-            # Distance from SMA
-            df[f"{col_name}_distance"] = (df["close"] - df[col_name]) / df["close"]
-
-        # SMA crossover signals
-        if 50 in self.config["sma_periods"] and 200 in self.config["sma_periods"]:
-            df["sma_50_200_cross"] = (df["sma_50"] > df["sma_200"]).astype(int)
-
-        return df
-
-    def _add_ema_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add Exponential Moving Average features."""
-        for period in self.config["ema_periods"]:
-            col_name = f"ema_{period}"
-            df[col_name] = df["close"].ewm(span=period, adjust=False).mean()
-            self._non_stationary_cols.add(col_name)
-
-            # Price relative to EMA
-            df[f"{col_name}_ratio"] = df["close"] / df[col_name]
-
-        return df
-
-    def _add_rsi(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add Relative Strength Index."""
-        period = self.config["rsi_period"]
-
-        # Calculate price changes
-        delta = df["close"].diff()
-
-        # Separate gains and losses
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-
-        # Calculate average gain and loss
+    @staticmethod
+    def _rsi(close: pd.Series, period: int) -> pd.Series:
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
         avg_gain = gain.rolling(window=period).mean()
         avg_loss = loss.rolling(window=period).mean()
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        return 100 - (100 / (1 + rs))
 
-        # Calculate RS and RSI
-        rs = avg_gain / avg_loss
-        df["rsi"] = 100 - (100 / (1 + rs))
-
-        # RSI zones
-        df["rsi_oversold"] = (df["rsi"] < 30).astype(int)
-        df["rsi_overbought"] = (df["rsi"] > 70).astype(int)
-
-        return df
-
-    def _add_macd(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add MACD indicator."""
-        config = self.config["macd_config"]
-
-        # Calculate MACD
-        ema_fast = df["close"].ewm(span=config["fast"], adjust=False).mean()
-        ema_slow = df["close"].ewm(span=config["slow"], adjust=False).mean()
-
-        df["macd"] = ema_fast - ema_slow
-        df["macd_signal"] = df["macd"].ewm(span=config["signal"], adjust=False).mean()
-        df["macd_histogram"] = df["macd"] - df["macd_signal"]
-        # Raw MACD / signal scale with price level — mark as non-stationary.
-        self._non_stationary_cols.update(["macd", "macd_signal", "macd_histogram"])
-
-        # Normalised versions (percentage of close) — these are stationary.
-        df["macd_pct"] = df["macd"] / df["close"]
-        df["macd_signal_pct"] = df["macd_signal"] / df["close"]
-        df["macd_histogram_pct"] = df["macd_histogram"] / df["close"]
-
-        # MACD crossover signal
-        df["macd_bullish"] = (df["macd"] > df["macd_signal"]).astype(int)
-
-        return df
-
-    def _add_bollinger_bands(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add Bollinger Bands."""
-        period = self.config["bb_period"]
-        std_dev = self.config["bb_std"]
-
-        # Calculate middle band (SMA)
-        df["bb_middle"] = df["close"].rolling(window=period).mean()
-
-        # Calculate standard deviation
-        rolling_std = df["close"].rolling(window=period).std()
-
-        # Calculate upper and lower bands
-        df["bb_upper"] = df["bb_middle"] + (rolling_std * std_dev)
-        df["bb_lower"] = df["bb_middle"] - (rolling_std * std_dev)
-        # Raw band levels are non-stationary — only used to derive %B / bandwidth
-        self._non_stationary_cols.update(["bb_middle", "bb_upper", "bb_lower"])
-
-        # Bandwidth and %B
-        df["bb_bandwidth"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_middle"]
-        df["bb_percent"] = (df["close"] - df["bb_lower"]) / (
-            df["bb_upper"] - df["bb_lower"]
-        )
-
-        return df
-
-    def _add_atr(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-        """Add Average True Range (volatility indicator)."""
-        # True Range calculation
+    @staticmethod
+    def _atr(df: pd.DataFrame, period: int) -> pd.Series:
         high_low = df["high"] - df["low"]
-        high_close = abs(df["high"] - df["close"].shift(1))
-        low_close = abs(df["low"] - df["close"].shift(1))
-
+        high_close = (df["high"] - df["close"].shift(1)).abs()
+        low_close = (df["low"] - df["close"].shift(1)).abs()
         true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        return true_range.rolling(window=period).mean()
 
-        # ATR
-        df["atr"] = true_range.rolling(window=period).mean()
-        self._non_stationary_cols.add("atr")  # absolute value — use atr_percent
-        df["atr_percent"] = df["atr"] / df["close"]
-
-        return df
-
-    def _add_volume_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add volume-based features."""
-        # Volume SMA
-        vol_period = self.config["volume_sma_period"]
-        df["volume_sma"] = df["volume"].rolling(window=vol_period).mean()
-        self._non_stationary_cols.add("volume_sma")
-        df["volume_ratio"] = df["volume"] / df["volume_sma"]
-
-        # Volume changes
-        df["volume_change"] = df["volume"].pct_change()
-
-        # On-Balance Volume — use rate-of-change instead of cumulative sum,
-        # because the raw cumsum grows monotonically and leaks time information.
-        obv_direction = df["close"].diff().apply(np.sign)
-        obv_raw = (obv_direction * df["volume"]).cumsum()
-        df["obv_roc"] = obv_raw.pct_change(periods=vol_period)
-
-        # Volume-weighted average price — use price/VWAP ratio instead of raw
-        # VWAP, which is a cumulative running average that drifts with price.
-        vwap = (df["typical_price"] * df["volume"]).cumsum() / df["volume"].cumsum()
-        df["vwap_ratio"] = df["close"] / vwap
-
-        return df
-
-    def _add_pattern_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add candlestick pattern features."""
-        # Body size
-        df["candle_body"] = abs(df["close"] - df["open"]) / df["open"]
-
-        # Upper and lower shadows
-        df["upper_shadow"] = (df["high"] - df[["open", "close"]].max(axis=1)) / df[
-            "open"
-        ]
-        df["lower_shadow"] = (df[["open", "close"]].min(axis=1) - df["low"]) / df[
-            "open"
-        ]
-
-        # Candle direction
-        df["bullish_candle"] = (df["close"] > df["open"]).astype(int)
-
-        # Doji detection (small body relative to range)
-        df["is_doji"] = (df["candle_body"] < 0.001).astype(int)
-
-        return df
-
-    def _add_lagged_features(
-        self, df: pd.DataFrame, lags: List[int] = [1, 2, 3, 5, 10]
-    ) -> pd.DataFrame:
-        """Add lagged features for time series context."""
-        # Lagged returns
-        for lag in lags:
-            df[f"returns_lag_{lag}"] = df["returns"].shift(lag)
-
-        # Lagged RSI
-        for lag in [1, 2, 3]:
-            df[f"rsi_lag_{lag}"] = df["rsi"].shift(lag)
-
-        return df
-
-    def _add_momentum_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add multi-horizon momentum and rolling volatility features.
-
-        These capture price momentum and volatility regime at multiple
-        timescales, which are among the strongest stationary predictors
-        of forward returns in equity markets.
-        """
-        for window in [5, 10, 20, 60, 120]:
-            # Rolling cumulative return over window
-            df[f"momentum_{window}d"] = df["close"].pct_change(periods=window)
-
-            # Rolling realized volatility (annualized)
-            df[f"volatility_{window}d"] = df["returns"].rolling(
-                window=window
-            ).std() * np.sqrt(252)
-
-        # Z-score of price relative to rolling mean (mean-reversion signal)
-        for window in [5, 10, 20, 60]:
-            rolling_mean = df["close"].rolling(window=window).mean()
-            rolling_std = df["close"].rolling(window=window).std()
-            df[f"zscore_{window}d"] = (df["close"] - rolling_mean) / rolling_std
-
-        # Rate of change of RSI (momentum of momentum)
-        df["rsi_roc"] = df["rsi"].diff(periods=5)
-
-        # Volatility ratio: short-term / long-term realized vol
-        vol_5 = df["returns"].rolling(window=5).std()
-        vol_20 = df["returns"].rolling(window=20).std()
-        vol_60 = df["returns"].rolling(window=60).std()
-        df["vol_ratio_5_20"] = vol_5 / vol_20
-        df["vol_ratio_20_60"] = vol_20 / vol_60
-
-        # Sharpe-like ratio: risk-adjusted momentum
-        for window in [20, 60]:
-            ret_mean = df["returns"].rolling(window=window).mean()
-            ret_std = df["returns"].rolling(window=window).std()
-            df[f"sharpe_{window}d"] = (ret_mean / ret_std) * np.sqrt(252)
-
-        # Drawdown from rolling max (regime indicator)
-        rolling_max_60 = df["close"].rolling(window=60).max()
-        df["drawdown_60d"] = (df["close"] - rolling_max_60) / rolling_max_60
-
-        rolling_max_120 = df["close"].rolling(window=120).max()
-        df["drawdown_120d"] = (df["close"] - rolling_max_120) / rolling_max_120
-
-        # Up-day ratio over window (directional persistence)
-        for window in [10, 20]:
-            df[f"up_ratio_{window}d"] = (
-                (df["returns"] > 0).rolling(window=window).mean()
-            )
-
-        return df
+    @staticmethod
+    def _vwap_ratio(df: pd.DataFrame, period: int) -> pd.Series:
+        typical_price = (df["high"] + df["low"] + df["close"]) / 3
+        pv = (typical_price * df["volume"]).rolling(window=period).sum()
+        vol = df["volume"].rolling(window=period).sum().replace(0, np.nan)
+        vwap = pv / vol
+        return df["close"] / vwap
 
     def get_feature_names(
-        self, df: pd.DataFrame, target_col: str = "target"
+        self, df: Optional[pd.DataFrame] = None, target_col: str = "target"
     ) -> List[str]:
-        """Get list of generated feature column names.
+        """Return the baseline feature column names.
 
         Args:
-            df: DataFrame with features generated
-            target_col: Target column name to exclude
+            df: Optional DataFrame; if given, only columns actually present
+                are returned. ``target_col`` is always excluded.
+            target_col: Target column name to exclude.
 
         Returns:
-            List of feature column names (excludes OHLCV, timestamp, target,
-            and non-stationary columns)
+            List of feature column names.
         """
-        exclude = {"open", "high", "low", "close", "volume", "timestamp", "symbol"}
-        exclude |= self._non_stationary_cols
-        exclude.add(target_col)
-        return [col for col in df.columns if col not in exclude]
+        names = [c for c in self.FEATURE_COLUMNS if c != target_col]
+        if df is not None:
+            names = [c for c in names if c in df.columns]
+        return names
 
     def prepare_for_ml(
         self,
@@ -355,36 +165,33 @@ class FeatureEngineering:
         forward_periods: int = 1,
         return_threshold: float = 0.0,
     ) -> pd.DataFrame:
-        """Prepare dataset for ML training.
+        """Attach a binary direction target and drop unusable rows.
+
+        The target is 1 if the close ``forward_periods`` bars ahead is higher
+        than the current close, else 0. Rows with NaN features (from rolling
+        windows) or a NaN target (end of series) are dropped.
 
         Args:
-            df: DataFrame with features
-            target_col: Name for target column
-            forward_periods: Periods ahead to predict
-            return_threshold: Minimum absolute return to keep a row.
-                Rows where the forward return is between -threshold and
-                +threshold are dropped (ambiguous / noise). Set to 0.0
-                to keep all rows (original behaviour).
+            df: DataFrame with features generated.
+            target_col: Name for the created target column.
+            forward_periods: Bars ahead to predict.
+            return_threshold: If > 0, drop rows whose forward return is within
+                +/- this threshold (ambiguous / noise labels).
 
         Returns:
-            DataFrame ready for train/test split with target column.
-            Use train_test_split() from this class — naive shuffled splits
-            leak future prices into training labels because each row's target
-            references a price forward_periods bars ahead.
+            DataFrame ready for a leakage-safe split. Never use a shuffled
+            split — use :meth:`train_test_split` or
+            ``RandomForestAnalyzer.prepare_data``.
         """
         result = df.copy()
         self._last_forward_periods = forward_periods
 
-        # Forward return
         fwd_return = result["close"].shift(-forward_periods) / result["close"] - 1
-
-        # Create target: 1 if price goes up, 0 if down
         result[target_col] = (fwd_return > 0).astype(int)
 
-        # Drop rows with NaN (from rolling windows and target shift)
-        result = result.dropna()
+        feature_cols = self.get_feature_names(result, target_col=target_col)
+        result = result.dropna(subset=feature_cols + [target_col])
 
-        # Drop ambiguous rows near zero return
         if return_threshold > 0:
             mask = fwd_return.reindex(result.index).abs() >= return_threshold
             result = result.loc[mask]
@@ -399,21 +206,20 @@ class FeatureEngineering:
     ) -> tuple:
         """Chronological train/test split with a gap to prevent leakage.
 
-        Because each row's target looks forward_periods bars ahead, the last
-        forward_periods rows of the training slice have targets that reference
-        prices in the test window. This method removes that overlap by
-        inserting a gap of forward_periods rows at the train/test boundary.
+        Because each row's target looks ``forward_periods`` bars ahead, the
+        last ``forward_periods`` rows of the training slice would reference
+        prices inside the test window. A gap of that size is removed at the
+        boundary.
 
         Args:
-            df: Time-ordered DataFrame produced by prepare_for_ml().
+            df: Time-ordered DataFrame from :meth:`prepare_for_ml`.
             test_size: Fraction of rows reserved for the test set.
-            forward_periods: Gap size at the boundary. Defaults to the value
-                from the last prepare_for_ml() call, or 1.
+            forward_periods: Gap size; defaults to the value from the last
+                :meth:`prepare_for_ml` call, or 1.
 
         Returns:
-            (train_df, test_df) — chronologically ordered with no target
-            leakage across the boundary. Fit any scalers/encoders on
-            train_df only, then transform test_df without refitting.
+            ``(train_df, test_df)`` with no target leakage across the boundary.
+            Fit scalers on ``train_df`` only.
         """
         gap = (
             forward_periods
@@ -432,83 +238,3 @@ class FeatureEngineering:
         train = df.iloc[: split_idx - gap].copy()
         test = df.iloc[split_idx:].copy()
         return train, test
-
-    def select_features(
-        self,
-        df: pd.DataFrame,
-        target_col: str = "target",
-        max_correlation: float = 0.85,
-        min_target_correlation: float = 0.0,
-    ) -> List[str]:
-        """Select features by removing highly correlated pairs and low-signal columns.
-
-        Uses a greedy approach: among correlated pairs, keep the feature with
-        higher absolute correlation to the target.
-
-        Args:
-            df: DataFrame with features and target column.
-            target_col: Target column name.
-            max_correlation: Drop one of any pair with |corr| above this.
-            min_target_correlation: Drop features with |corr to target| below this.
-
-        Returns:
-            Filtered list of feature column names.
-        """
-        feature_cols = self.get_feature_names(df, target_col=target_col)
-        sub = df[feature_cols + [target_col]].dropna()
-
-        if len(sub) < 30:
-            return feature_cols
-
-        # Correlation with target
-        target_corr = sub[feature_cols].corrwith(sub[target_col]).abs()
-
-        # Drop features with negligible target correlation
-        keep = target_corr[target_corr >= min_target_correlation].index.tolist()
-        if not keep:
-            return feature_cols  # fallback: keep all
-
-        # Pairwise feature correlation matrix
-        corr_matrix = sub[keep].corr().abs()
-        corr_values = corr_matrix.to_numpy()
-
-        # Greedy removal: for each highly-correlated pair, drop the one with
-        # lower absolute target correlation
-        to_drop: set = set()
-        for i in range(len(keep)):
-            if keep[i] in to_drop:
-                continue
-            for j in range(i + 1, len(keep)):
-                if keep[j] in to_drop:
-                    continue
-                if corr_values[i, j] > max_correlation:
-                    # Drop the feature less correlated with target
-                    if target_corr[keep[i]] < target_corr[keep[j]]:
-                        to_drop.add(keep[i])
-                        break  # feature i is dropped, move on
-                    else:
-                        to_drop.add(keep[j])
-
-        selected = [f for f in keep if f not in to_drop]
-        return selected
-
-    def get_feature_importance_names(self) -> Dict[str, str]:
-        """Get human-readable names for features.
-
-        Returns:
-            Dict mapping feature names to descriptions
-        """
-        return {
-            "returns": "Daily Returns",
-            "rsi": "RSI (14)",
-            "macd_pct": "MACD % of Close",
-            "macd_histogram_pct": "MACD Histogram % of Close",
-            "bb_percent": "Bollinger %B",
-            "bb_bandwidth": "Bollinger Bandwidth",
-            "atr_percent": "ATR %",
-            "volume_ratio": "Volume Ratio",
-            "obv_roc": "OBV Rate-of-Change",
-            "vwap_ratio": "Price/VWAP Ratio",
-            "sma_50_distance": "Distance from SMA(50)",
-            "ema_12_ratio": "Price/EMA(12) Ratio",
-        }

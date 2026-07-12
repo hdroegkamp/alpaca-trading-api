@@ -1,26 +1,17 @@
 """Machine learning module for algorithmic trading.
 
-This module provides ML-based trading strategies and predictive models:
-- Feature engineering from OHLCV data
-- LSTM time series forecasting
-- Random Forest classification
-- Model evaluation and interpretability
+A deliberately simple, testable baseline:
+- Curated stationary feature engineering from OHLCV data
+- A small, regularised Random Forest classifier for price direction
+- A long/short trading strategy driven by the model's probabilities
 """
 
 from src.trading.ml.feature_engineering import FeatureEngineering
-from src.trading.ml.lstm_predictor import LSTMPredictor
 from src.trading.ml.random_forest_analyzer import RandomForestAnalyzer
-from src.trading.ml.ml_strategy import (
-    MLPredictionStrategy,
-    LSTMStrategy,
-    RandomForestStrategy,
-)
+from src.trading.ml.ml_strategy import RandomForestStrategy
 
 __all__ = [
     "FeatureEngineering",
-    "LSTMPredictor",
     "RandomForestAnalyzer",
-    "MLPredictionStrategy",
-    "LSTMStrategy",
     "RandomForestStrategy",
 ]
