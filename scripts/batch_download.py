@@ -10,7 +10,6 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import List
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -21,86 +20,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.trading.data import AlpacaDataFetcher, DataStore
+from src.trading.data.universe import UNIVERSES, load_universe_file
 from src.trading.utils.logging import setup_logger
 
 logger = setup_logger("batch_download")
-
-
-# Predefined symbol universes
-UNIVERSES = {
-    "indices": ["SPY", "QQQ", "IWM", "DIA", "VTI", "VOO"],
-    "sectors": [
-        "XLK",
-        "XLF",
-        "XLE",
-        "XLV",
-        "XLI",
-        "XLP",
-        "XLY",
-        "XLU",
-        "XLB",
-        "XLRE",
-        "XLC",
-    ],
-    "mega_cap": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B"],
-    "tech": [
-        "AAPL",
-        "MSFT",
-        "GOOGL",
-        "META",
-        "NVDA",
-        "AMD",
-        "INTC",
-        "CRM",
-        "ORCL",
-        "CSCO",
-    ],
-    "finance": ["JPM", "BAC", "WFC", "GS", "MS", "C", "USB", "PNC", "TFC", "COF"],
-    "energy": ["XOM", "CVX", "COP", "SLB", "EOG", "MPC", "PSX", "VLO", "HES", "OXY"],
-    "healthcare": [
-        "UNH",
-        "JNJ",
-        "LLY",
-        "PFE",
-        "ABBV",
-        "TMO",
-        "MRK",
-        "DHR",
-        "ABT",
-        "BMY",
-    ],
-    "starter": [
-        "SPY",
-        "QQQ",
-        "AAPL",
-        "MSFT",
-        "GOOGL",
-        "AMZN",
-        "TSLA",
-        "NVDA",
-        "META",
-        "JPM",
-    ],
-}
-
-
-def load_universe_file(filepath: str) -> List[str]:
-    """Load symbols from a text file (one per line).
-
-    Args:
-        filepath: Path to universe file
-
-    Returns:
-        List of symbols
-    """
-    symbols = []
-    with open(filepath, "r") as f:
-        for line in f:
-            line = line.strip()
-            # Skip empty lines and comments
-            if line and not line.startswith("#"):
-                symbols.append(line.upper())
-    return symbols
 
 
 def main():

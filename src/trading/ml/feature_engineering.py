@@ -158,6 +158,17 @@ class FeatureEngineering:
             names = [c for c in names if c in df.columns]
         return names
 
+    @staticmethod
+    def forward_return(close: pd.Series, forward_periods: int = 1) -> pd.Series:
+        """Forward return ``forward_periods`` bars ahead (NaN at the series end).
+
+        Shared by :meth:`prepare_for_ml` (per-symbol binary target) and the
+        cross-sectional panel builder (``src.trading.ml.panel``), which ranks
+        this same raw return across symbols within each date instead of
+        binarizing it in isolation.
+        """
+        return close.shift(-forward_periods) / close - 1
+
     def prepare_for_ml(
         self,
         df: pd.DataFrame,
@@ -186,7 +197,7 @@ class FeatureEngineering:
         result = df.copy()
         self._last_forward_periods = forward_periods
 
-        fwd_return = result["close"].shift(-forward_periods) / result["close"] - 1
+        fwd_return = self.forward_return(result["close"], forward_periods)
         result[target_col] = (fwd_return > 0).astype(int)
 
         feature_cols = self.get_feature_names(result, target_col=target_col)

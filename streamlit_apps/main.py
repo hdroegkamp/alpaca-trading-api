@@ -31,6 +31,7 @@ pg = st.navigation(
         st.Page("pages/3_Technical_Analysis.py", title="Technical Analysis"),
         st.Page("pages/4_Data_Quality.py", title="Data Quality"),
         st.Page("pages/5_ML_Analysis.py", title="ML Analysis"),
+        st.Page("pages/6_Portfolio_ML.py", title="Portfolio ML"),
     ]
 )
 pg.run()
