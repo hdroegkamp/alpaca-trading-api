@@ -39,7 +39,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         default="data",
-        help="Data storage directory (e.g., Z:\\market_data)",
+        help="Data storage directory",
     )
     parser.add_argument(
         "--organize",
@@ -107,3 +107,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

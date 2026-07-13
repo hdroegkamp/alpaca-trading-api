@@ -45,7 +45,7 @@ with st.sidebar:
     st.subheader("Configuration")
     data_dir = st.text_input(
         "Data Directory",
-        value="Z:\\market_data",
+        value="data",
         help="Path to your market data storage",
     )
     st.session_state["data_dir"] = data_dir
@@ -137,7 +137,7 @@ st.markdown(
     """
 ### Quick Start Guide
 
-1. **Configure Data Directory**: Set your data directory in the sidebar (default: `Z:\\market_data`)
+1. **Configure Data Directory**: Set your data directory in the sidebar (default: `data`)
 
 2. **Explore Your Data**: Navigate to **Data Explorer** to visualize and analyze your downloaded data
 

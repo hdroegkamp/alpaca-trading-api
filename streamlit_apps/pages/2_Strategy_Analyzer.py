@@ -20,7 +20,7 @@ st.markdown("Test and optimize trading strategies with backtesting")
 st.markdown("---")
 
 # Get data directory from session state
-data_dir = st.session_state.get("data_dir", "Z:\\market_data")
+data_dir = st.session_state.get("data_dir", "data")
 
 
 # Load data store

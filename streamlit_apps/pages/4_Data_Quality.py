@@ -17,7 +17,7 @@ st.markdown("Verify data completeness and identify potential issues")
 st.markdown("---")
 
 # Get data directory
-data_dir = st.session_state.get("data_dir", "Z:\\market_data")
+data_dir = st.session_state.get("data_dir", "data")
 
 
 @st.cache_resource

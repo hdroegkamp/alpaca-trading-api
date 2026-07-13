@@ -35,7 +35,7 @@ st.markdown(
 with st.sidebar:
     st.header("Configuration")
     data_dir = st.text_input(
-        "Data Directory", value="Z:\\market_data", help="Path to market data storage"
+        "Data Directory", value="data", help="Path to market data storage"
     )
     model_dir = st.text_input(
         "Model Directory", value="models", help="Directory to save/load trained models"

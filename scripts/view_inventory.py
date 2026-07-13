@@ -2,8 +2,8 @@
 """View inventory of stored market data.
 
 Usage:
-    python scripts/view_inventory.py --data-dir Z:\\market_data
-    python scripts/view_inventory.py --data-dir Z:\\market_data --timeframe 1Day
+    python scripts/view_inventory.py --data-dir data
+    python scripts/view_inventory.py --data-dir data --timeframe 1Day
 """
 
 import argparse
@@ -22,7 +22,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         default="data",
-        help="Data storage directory (e.g., Z:\\market_data)",
+        help="Data storage directory",
     )
     parser.add_argument(
         "--timeframe", help="Filter by specific timeframe (1Day, 1Hour, etc.)"

@@ -20,7 +20,7 @@ from src.trading.ml.feature_engineering import FeatureEngineering
 from src.trading.ml.random_forest_analyzer import RandomForestAnalyzer
 from src.trading.ml.ml_strategy import RandomForestStrategy
 
-DATA_DIR = "Z:\\market_data"
+DATA_DIR = "data"
 
 
 def load_sample():

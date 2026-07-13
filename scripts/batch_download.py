@@ -3,7 +3,7 @@
 
 Usage:
     python scripts/batch_download.py --universe universes/sp500.txt
-    python scripts/batch_download.py --data-dir Z:\\market_data
+    python scripts/batch_download.py --data-dir data
 """
 
 import argparse
@@ -129,7 +129,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         default="data",
-        help="Data storage directory (e.g., Z:\\market_data)",
+        help="Data storage directory",
     )
 
     # Control parameters

@@ -19,7 +19,7 @@ st.markdown("Advanced charting with technical indicators")
 st.markdown("---")
 
 # Get data directory
-data_dir = st.session_state.get("data_dir", "Z:\\market_data")
+data_dir = st.session_state.get("data_dir", "data")
 
 
 @st.cache_resource

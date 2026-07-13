@@ -18,7 +18,7 @@ st.markdown("Visualize and analyze historical market data")
 st.markdown("---")
 
 # Get data directory from session state
-data_dir = st.session_state.get("data_dir", "Z:\\market_data")
+data_dir = st.session_state.get("data_dir", "data")
 
 
 # Load data store
@@ -47,7 +47,7 @@ try:
     if inventory.empty:
         st.error(f"No data found in {data_dir}. Please download data first.")
         st.info(
-            'Run: `python scripts/batch_download.py --universe starter --start 2020-01-01 --data-dir "Z:\\market_data"`'
+            'Run: `python scripts/batch_download.py --universe starter --start 2020-01-01 --data-dir "data"`'
         )
         st.stop()
 

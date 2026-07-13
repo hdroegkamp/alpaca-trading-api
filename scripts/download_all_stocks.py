@@ -5,7 +5,7 @@ This script fetches the complete list of tradeable assets from Alpaca
 and downloads historical data for all of them.
 
 Usage:
-    python scripts/download_all_stocks.py --start 2010-01-01 --data-dir Z:\\market_data
+    python scripts/download_all_stocks.py --start 2010-01-01 --data-dir data
 
 WARNING: This will download data for 8000+ symbols and may take several hours.
 """
@@ -126,7 +126,7 @@ def main():
         help="Bar timeframe (1Day recommended for large downloads)",
     )
     parser.add_argument(
-        "--data-dir", default="Z:\\market_data", help="Data storage directory"
+        "--data-dir", default="data", help="Data storage directory"
     )
     parser.add_argument(
         "--delay",
