@@ -61,6 +61,10 @@ Data is saved in `data/` directory as compressed parquet files.
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_strategy.py -v
 ```
 
+### 4. Live Paper Trading
+
+See the dedicated **Live Paper Trading** section below.
+
 ## Built-in Strategies
 
 ### Moving Average Crossover
@@ -189,11 +193,12 @@ print(store.list_symbols())
 - ⬜ Parameter optimization
 
 ### Phase 3 - Production
-- ⬜ Live order execution adapter
-- ⬜ Position tracking
-- ⬜ Real-time monitoring
-- ⬜ Circuit breakers and risk checks
-- ⬜ Alerting and notifications
+- [x] Live order execution adapter (`src/trading/execution/broker.py`)
+- [x] Position tracking (`data/live/equity_log.csv`, `orders_log.csv`)
+- [x] Real-time monitoring (Live Performance dashboard page)
+- [x] Circuit breakers and risk checks (`RiskManager` reused per-order, market-open gate)
+- ⬜ Alerting and notifications (a weekly Claude Code review agent summarizes
+  performance — see below — but no threshold-based alerting yet)
 
 ### Phase 4 - Advanced
 - ⬜ Multi-asset portfolios
@@ -277,6 +282,90 @@ allowed, reason = risk_mgr.check_position_size(
     position_value=15000,
     portfolio_value=100000
 )
+```
+
+## Live Paper Trading
+
+Turns the pooled cross-sectional model into a real (paper-account) long/short book via
+`src/trading/execution/`. Nothing here is auto-scheduled — you decide when it runs.
+
+### One-time setup
+
+```powershell
+copy .env.example .env
+# then fill in APCA_API_KEY_ID / APCA_API_SECRET_KEY from
+# https://app.alpaca.markets/paper/dashboard/overview
+.\.venv\Scripts\python.exe scripts\check_alpaca.py   # confirms connectivity
+```
+
+### Train a model
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_pooled_model.py --universe starter
+```
+
+Trains against the full `data/` archive and saves to `data/live/pooled_model_*.pkl`. Re-run
+this periodically (e.g. weekly) — the daily rebalance below only loads and scores, it never
+retrains.
+
+### Dry run (default — computes and logs intended trades, submits nothing)
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_live_rebalance.py --universe starter
+```
+
+### Go live
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_live_rebalance.py --universe starter --live
+```
+
+Do this manually the first several times and watch the output before automating anything —
+that burn-in period is the point. `--capital-fraction` (default 0.5) caps how much of account
+equity gets deployed; `--max-position-pct` (default 0.2) feeds `RiskManager` as a per-position
+cap; both are worth sanity-checking on early runs.
+
+### Track performance
+
+```powershell
+streamlit run streamlit_apps\main.py
+```
+
+Open the **Live Performance** page — reads `data/live/equity_log.csv` and `orders_log.csv`
+(both git-ignored, same as the rest of `data/`), which every run appends to regardless of
+dry-run or `--live`.
+
+### Automate the daily run (only once you're comfortable with manual runs)
+
+`scripts/run_live_rebalance.bat` wraps the `--live` command with the right working directory
+and redirects output to `logs\live_rebalance_task.log`. Register it with Windows Task
+Scheduler to run each weekday shortly after market open (adjust `/st` for your machine's local
+time relative to 9:30 AM ET):
+
+```powershell
+schtasks /create /tn "AlpacaLiveRebalance" /tr "C:\Users\hdroe\OneDrive\Documents\Coursera\alpaca-trading-api\scripts\run_live_rebalance.bat" /sc WEEKLY /d MON,TUE,WED,THU,FRI /st 09:35
+```
+
+Remove it later with `schtasks /delete /tn "AlpacaLiveRebalance" /f`.
+
+### Weekly performance review (optional)
+
+`scripts/weekly_review.bat` runs a read-only, headless Claude Code prompt over the two log
+files and appends a plain-English summary to `logs\weekly_review.log` — evaluation, not
+execution, so it's kept on its own schedule separate from the daily rebalance. Unlike the
+rest of this section, this path isn't exercised by the standalone Claude Code CLI in this
+environment (only the VSCode extension is), so treat the exact flags as documented-but-not-
+tested here and verify against `claude --help` on your machine:
+
+```powershell
+npm install -g @anthropic-ai/claude-code   # one-time
+claude setup-token                          # one-time; makes unattended runs possible
+```
+
+Then register a second scheduled task, e.g. weekly on Monday morning:
+
+```powershell
+schtasks /create /tn "AlpacaWeeklyReview" /tr "C:\Users\hdroe\OneDrive\Documents\Coursera\alpaca-trading-api\scripts\weekly_review.bat" /sc WEEKLY /d MON /st 08:00
 ```
 
 ## Debugging and Logging

@@ -2,7 +2,12 @@
 
 from .storage import DataStore
 from .ingest import AlpacaDataFetcher
-from .universe import UNIVERSES, load_universe_file, symbols_from_inventory
+from .universe import (
+    UNIVERSES,
+    load_universe_file,
+    resolve_universe,
+    symbols_from_inventory,
+)
 
 __all__ = [
     "DataStore",
@@ -10,4 +15,5 @@ __all__ = [
     "UNIVERSES",
     "load_universe_file",
     "symbols_from_inventory",
+    "resolve_universe",
 ]

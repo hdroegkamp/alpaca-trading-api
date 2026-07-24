@@ -1,6 +1,7 @@
 """Predefined and file-based stock universes for downloads and panel construction."""
 
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
 from .storage import DataStore
 
@@ -96,3 +97,45 @@ def symbols_from_inventory(data_store: DataStore, timeframe: str = "1Day") -> Li
         Sorted list of symbols with an existing data file.
     """
     return data_store.list_symbols(timeframe=timeframe)
+
+
+def resolve_universe(
+    spec: str,
+    data_store: Optional[DataStore] = None,
+    timeframe: str = "1Day",
+) -> List[str]:
+    """Resolve a single CLI-friendly string into a list of symbols.
+
+    Shared by scripts that need a universe from a ``--universe`` flag
+    (``train_pooled_model.py``, ``run_live_rebalance.py``) so the resolution
+    rules live in one place. Tried in order:
+
+    1. A key in ``UNIVERSES`` (e.g. ``"starter"``).
+    2. The literal ``"inventory"`` — every symbol with locally stored data
+       for ``timeframe`` (requires ``data_store``).
+    3. A path to an existing universe file (one symbol per line).
+    4. A comma-separated manual list (e.g. ``"AAPL,MSFT,GOOGL"``).
+
+    Args:
+        spec: The universe specifier.
+        data_store: Required only if ``spec == "inventory"``.
+        timeframe: Bar timeframe, used only for the ``"inventory"`` case.
+
+    Returns:
+        List of symbols.
+
+    Raises:
+        ValueError: If ``spec == "inventory"`` but ``data_store`` is None.
+    """
+    if spec in UNIVERSES:
+        return UNIVERSES[spec]
+
+    if spec == "inventory":
+        if data_store is None:
+            raise ValueError("--universe inventory requires a data_store")
+        return symbols_from_inventory(data_store, timeframe=timeframe)
+
+    if Path(spec).exists():
+        return load_universe_file(spec)
+
+    return [s.strip().upper() for s in spec.split(",") if s.strip()]

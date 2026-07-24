@@ -6,6 +6,7 @@ __pycache__/
 *.env
 .env
 .env.*
+!.env.example
 .vscode/
 .ipynb_checkpoints/
 .DS_Store
@@ -17,6 +18,7 @@ build/
 dist/
 .python-version
 /data/
+settings.json
 
 # Career development documentation (personal use only)
 career-docs/
