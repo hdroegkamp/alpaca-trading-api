@@ -17,10 +17,12 @@ from src.trading.ml.panel import build_panel
 from src.trading.ml.cross_sectional_labels import add_cross_sectional_labels
 from src.trading.ml.panel_split import (
     assert_no_leakage,
+    panel_holdout_split,
     panel_train_val_test_split,
     panel_walk_forward_splits,
 )
 from src.trading.ml.pooled_model import PooledForestModel
+from src.trading.ml.promotion import validate_holdout_promotion
 
 __all__ = [
     "FeatureEngineering",
@@ -29,7 +31,9 @@ __all__ = [
     "build_panel",
     "add_cross_sectional_labels",
     "assert_no_leakage",
+    "panel_holdout_split",
     "panel_train_val_test_split",
     "panel_walk_forward_splits",
     "PooledForestModel",
+    "validate_holdout_promotion",
 ]

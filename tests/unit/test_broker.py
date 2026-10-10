@@ -157,5 +157,45 @@ class TestSubmitTargetWeights:
         assert row["qty"] == 100  # 0.2 * 100_000 / 200
 
 
+class TestSubmitOrderErrors:
+    def test_submit_order_exception_is_recorded_not_raised(self):
+        broker, client = _make_broker(equity=100_000.0, positions=[])
+        client.submit_order.side_effect = Exception("rejected by exchange")
+
+        results = broker.submit_target_weights(
+            target_weights={"AAPL": 0.2},
+            prices={"AAPL": 100.0},
+            dry_run=False,
+        )
+
+        row = next(r for r in results if r["symbol"] == "AAPL")
+        assert row["status"] == "error"
+        assert "rejected by exchange" in row["detail"]
+
+    def test_one_symbol_erroring_does_not_abort_the_rebalance(self):
+        broker, client = _make_broker(equity=100_000.0, positions=[])
+
+        good_order = SimpleNamespace(id="order-123")
+
+        def submit_order_side_effect(request):
+            if request.symbol == "AAPL":
+                raise Exception("rejected by exchange")
+            return good_order
+
+        client.submit_order.side_effect = submit_order_side_effect
+
+        results = broker.submit_target_weights(
+            target_weights={"AAPL": 0.2, "MSFT": 0.2},
+            prices={"AAPL": 100.0, "MSFT": 100.0},
+            dry_run=False,
+        )
+
+        aapl_row = next(r for r in results if r["symbol"] == "AAPL")
+        msft_row = next(r for r in results if r["symbol"] == "MSFT")
+        assert aapl_row["status"] == "error"
+        assert msft_row["status"] == "submitted"
+        assert client.submit_order.call_count == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

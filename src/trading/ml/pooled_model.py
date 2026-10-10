@@ -337,18 +337,21 @@ class PooledForestModel:
             .reset_index(drop=True)
         )
 
-    def save(self, filepath: str) -> None:
+    def save(self, filepath: str, extra_metadata: Optional[Dict[str, Any]] = None) -> None:
         """Persist the model, scaler, and feature columns.
 
         Args:
             filepath: Path prefix (without extension).
+            extra_metadata: Optional additional keys merged into the saved
+                metadata dict — e.g. holdout promotion-gate results, so the
+                deployed pickle carries proof of what it passed.
         """
         with open(f"{filepath}_model.pkl", "wb") as f:
             pickle.dump(self.model, f)
+        metadata = {"scaler": self.scaler, "feature_columns": self.feature_columns}
+        metadata.update(extra_metadata or {})
         with open(f"{filepath}_metadata.pkl", "wb") as f:
-            pickle.dump(
-                {"scaler": self.scaler, "feature_columns": self.feature_columns}, f
-            )
+            pickle.dump(metadata, f)
 
     def load(self, filepath: str) -> None:
         """Load a model, scaler, and feature columns saved by :meth:`save`.

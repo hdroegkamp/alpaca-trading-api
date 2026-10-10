@@ -308,6 +308,14 @@ Trains against the full `data/` archive and saves to `data/live/pooled_model_*.p
 this periodically (e.g. weekly) — the daily rebalance below only loads and scores, it never
 retrains.
 
+Before saving, it holds out the most recent `--holdout-days` (default 60) dates, trains a
+candidate on history only, and backtests that holdout window with the same accounting code
+used for research backtests (`PortfolioBacktest`) — this validates the *literal artifact*
+about to be deployed, not just the method. If the holdout Sharpe doesn't clear `--min-sharpe`
+(default 0.0 — must be profitable out-of-sample), the model is **not saved** and the command
+exits non-zero; override with `--force` if you've reviewed why and want to save anyway. The
+holdout metrics are stashed in the saved `_metadata.pkl` alongside the scaler/feature columns.
+
 ### Dry run (default — computes and logs intended trades, submits nothing)
 
 ```powershell
@@ -324,6 +332,22 @@ Do this manually the first several times and watch the output before automating 
 that burn-in period is the point. `--capital-fraction` (default 0.5) caps how much of account
 equity gets deployed; `--max-position-pct` (default 0.2) feeds `RiskManager` as a per-position
 cap; both are worth sanity-checking on early runs.
+
+### Circuit breaker (daily loss / drawdown)
+
+Every run checks today's equity against `--max-daily-loss-pct` (default 0.02, i.e. 2%) and
+`--max-drawdown-pct` (default 0.10, i.e. 10% from peak equity, read from `data/live/equity_log.csv`).
+If either is breached, the run halts **before submitting any orders**, logs the reason, appends
+a `mode=HALTED` row to `equity_log.csv`, exits non-zero, and — critically — persists the trip to
+`data/live/circuit_breaker.json` so **every subsequent run** (including scheduled ones) also halts
+immediately, without doing any scoring or trading, until a human reviews what happened and runs:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_live_rebalance.py --reset-circuit-breaker
+```
+
+There is no automatic reset. If `scripts\run_live_rebalance.bat` ever exits non-zero, it appends
+an explicit `HALTED` marker to `logs\live_rebalance_task.log` so this isn't buried in scrollback.
 
 ### Track performance
 

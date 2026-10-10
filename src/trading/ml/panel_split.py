@@ -98,6 +98,53 @@ def panel_train_val_test_split(
     }
 
 
+def panel_holdout_split(
+    panel: pd.DataFrame,
+    date_col: str = "date",
+    holdout_days: int = 60,
+    embargo_periods: int = 1,
+) -> Dict[str, pd.DatetimeIndex]:
+    """Chronological two-way split: all history vs. a recent holdout tail.
+
+    Unlike :func:`panel_train_val_test_split`'s fractional split (for
+    comparing hyperparameters), this reserves a fixed number of the panel's
+    most recent unique dates as a holdout — used to validate one specific
+    trained artifact (e.g. before promoting it to live scoring) against data
+    it has never seen.
+
+    Args:
+        panel: Long cross-sectional panel.
+        date_col: Column identifying each cross-section.
+        holdout_days: Number of most-recent unique dates to hold out.
+        embargo_periods: Gap, in unique dates, removed immediately before
+            the holdout window so no label straddles the split.
+
+    Returns:
+        Dict with ``train_dates`` and ``holdout_dates`` ``DatetimeIndex``
+        entries.
+
+    Raises:
+        ValueError: If too few unique dates remain for the requested
+            ``holdout_days``/``embargo_periods``.
+    """
+    dates = np.sort(panel[date_col].unique())
+    n = len(dates)
+
+    holdout_start = n - holdout_days
+    train_end = holdout_start - embargo_periods
+
+    if holdout_start <= 0 or train_end < 1:
+        raise ValueError(
+            f"Too few unique dates ({n}) for holdout_days={holdout_days}, "
+            f"embargo_periods={embargo_periods}."
+        )
+
+    return {
+        "train_dates": pd.DatetimeIndex(dates[:train_end]),
+        "holdout_dates": pd.DatetimeIndex(dates[holdout_start:]),
+    }
+
+
 def assert_no_leakage(
     all_dates: np.ndarray,
     train_dates: pd.DatetimeIndex,

@@ -52,6 +52,12 @@ from src.trading.execution.target_portfolio import build_target_weights
 from src.trading.ml.panel import build_panel
 from src.trading.ml.pooled_model import PooledForestModel
 from src.trading.risk.rules import RiskManager
+from src.trading.risk.state import (
+    evaluate_circuit_breaker,
+    load_breaker_state,
+    reset_breaker_state,
+    save_breaker_state,
+)
 from src.trading.utils.logging import setup_logger
 
 logger = setup_logger("run_live_rebalance", log_file="logs/run_live_rebalance.log")
@@ -112,6 +118,31 @@ def main():
     parser.add_argument("--min-trade-dollars", type=float, default=50.0)
     parser.add_argument("--max-position-pct", type=float, default=0.2)
     parser.add_argument(
+        "--max-daily-loss-pct",
+        type=float,
+        default=0.02,
+        help="Max daily loss (fraction of equity) before the circuit breaker halts "
+        "this and all future runs until reset (default 0.02)",
+    )
+    parser.add_argument(
+        "--max-drawdown-pct",
+        type=float,
+        default=0.10,
+        help="Max drawdown from peak equity before the circuit breaker halts "
+        "this and all future runs until reset (default 0.10)",
+    )
+    parser.add_argument(
+        "--circuit-breaker-state",
+        default="data/live/circuit_breaker.json",
+        help="Path to the persisted circuit-breaker state file",
+    )
+    parser.add_argument(
+        "--reset-circuit-breaker",
+        action="store_true",
+        help="Clear a previously tripped circuit breaker and exit immediately "
+        "(does not score or trade)",
+    )
+    parser.add_argument(
         "--live", action="store_true", help="Actually submit orders (default: dry run)"
     )
     parser.add_argument(
@@ -120,6 +151,22 @@ def main():
         help="Skip re-downloading bars and use whatever is already in --data-dir",
     )
     args = parser.parse_args()
+
+    breaker_state_path = Path(args.circuit_breaker_state)
+
+    if args.reset_circuit_breaker:
+        reset_breaker_state(breaker_state_path)
+        logger.info(f"Circuit breaker reset ({breaker_state_path}).")
+        return
+
+    state = load_breaker_state(breaker_state_path)
+    if state.get("triggered"):
+        logger.error(
+            f"Circuit breaker is TRIPPED (reason: {state.get('reason')}, at "
+            f"{state.get('triggered_at')}) — halting before doing any work. "
+            "Review why, then run with --reset-circuit-breaker to resume."
+        )
+        sys.exit(1)
 
     mode = "LIVE" if args.live else "DRY RUN"
     logger.info(f"=== run_live_rebalance ({mode}) ===")
@@ -154,7 +201,34 @@ def main():
     prices = dict(zip(scored["symbol"], scored["close"]))
 
     broker_equity = broker.get_equity()
-    risk_manager = RiskManager(max_position_size=args.max_position_pct)
+    risk_manager = RiskManager(
+        max_position_size=args.max_position_pct,
+        max_daily_loss=args.max_daily_loss_pct,
+        max_drawdown=args.max_drawdown_pct,
+    )
+
+    tripped, reason = evaluate_circuit_breaker(EQUITY_LOG, broker_equity, risk_manager)
+    if tripped:
+        save_breaker_state(
+            breaker_state_path,
+            triggered=True,
+            reason=reason,
+            triggered_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        logger.error(f"Circuit breaker TRIPPED: {reason}. Halting — no orders submitted.")
+        append_log(
+            EQUITY_LOG,
+            {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "signal_date": str(latest_date.date()),
+                "equity": broker_equity,
+                "cash": broker.get_cash(),
+                "n_long": 0,
+                "n_short": 0,
+                "mode": "HALTED",
+            },
+        )
+        sys.exit(1)
 
     orders = broker.submit_target_weights(
         scaled_weights,
