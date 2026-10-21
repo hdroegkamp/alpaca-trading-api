@@ -28,7 +28,10 @@ from src.trading.ml.cross_sectional_labels import add_cross_sectional_labels
 from src.trading.ml.feature_engineering import FeatureEngineering
 from src.trading.ml.panel import build_panel
 from src.trading.ml.pooled_model import PooledForestModel
-from src.trading.ml.promotion import validate_holdout_promotion
+from src.trading.ml.promotion import (
+    validate_holdout_promotion,
+    validate_walk_forward_promotion,
+)
 from src.trading.utils.logging import setup_logger
 
 logger = setup_logger("train_pooled_model")
@@ -76,9 +79,28 @@ def main():
         "out-of-sample)",
     )
     parser.add_argument(
+        "--wf-splits",
+        type=int,
+        default=10,
+        help="Expanding-window folds for the walk-forward method gate (default 10)",
+    )
+    parser.add_argument(
+        "--wf-min-sharpe",
+        type=float,
+        default=0.5,
+        help="Method gate: stitched walk-forward out-of-sample Sharpe, net of "
+        "--commission, must exceed this (default 0.5)",
+    )
+    parser.add_argument(
+        "--commission",
+        type=float,
+        default=0.001,
+        help="Flat commission fraction on turnover for both gates' backtests (default 0.001)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
-        help="Save the model even if it fails the holdout promotion gate",
+        help="Save the model even if it fails either promotion gate",
     )
     args = parser.parse_args()
 
@@ -113,33 +135,61 @@ def main():
         "min_samples_leaf": args.min_samples_leaf,
     }
 
+    # Both gates train on the labeled panel but backtest on the full panel —
+    # see src/trading/ml/promotion.py for why that distinction matters.
+    wf_gate = validate_walk_forward_promotion(
+        labeled,
+        panel,
+        feature_cols=feature_cols,
+        model_params=model_params,
+        n_splits=args.wf_splits,
+        top_pct=args.top_quantile,
+        bottom_pct=args.bottom_quantile,
+        commission=args.commission,
+        min_sharpe=args.wf_min_sharpe,
+    )
+    wf_sharpe = wf_gate["summary"]["sharpe_ratio"]
+    logger.info(
+        f"Walk-forward method gate ({args.wf_splits} folds, {wf_gate['n_days']} OOS dates): "
+        f"sharpe={wf_sharpe:.3f} (bar: >{args.wf_min_sharpe}), "
+        f"max_drawdown={wf_gate['summary']['max_drawdown']:.3%}"
+    )
+
     gate = validate_holdout_promotion(
         labeled,
+        panel,
         feature_cols=feature_cols,
         model_params=model_params,
         holdout_days=args.holdout_days,
         top_pct=args.top_quantile,
         bottom_pct=args.bottom_quantile,
+        commission=args.commission,
         min_sharpe=args.min_sharpe,
     )
     sharpe = gate["summary"]["sharpe_ratio"]
     holdout_dates = gate["holdout_dates"]
     logger.info(
-        f"Holdout backtest ({holdout_dates.min().date()} -> {holdout_dates.max().date()}, "
+        f"Holdout artifact gate ({holdout_dates.min().date()} -> {holdout_dates.max().date()}, "
         f"{len(holdout_dates)} dates): sharpe={sharpe:.3f} "
         f"(bar: >{args.min_sharpe}), max_drawdown={gate['summary']['max_drawdown']:.3%}"
     )
 
-    if not gate["passed"] and not args.force:
+    failures = []
+    if not wf_gate["passed"]:
+        failures.append(f"walk-forward Sharpe {wf_sharpe:.3f} <= {args.wf_min_sharpe}")
+    if not gate["passed"]:
+        failures.append(f"holdout Sharpe {sharpe:.3f} <= {args.min_sharpe}")
+
+    if failures and not args.force:
         logger.error(
-            f"Holdout Sharpe {sharpe:.3f} did not clear the promotion bar "
-            f"({args.min_sharpe}) — NOT saving. Re-run with --force to override."
+            f"Promotion gate failed ({'; '.join(failures)}) — NOT saving. "
+            "Re-run with --force to override."
         )
         sys.exit(1)
-    elif not gate["passed"]:
+    elif failures:
         logger.warning(
-            f"Holdout Sharpe {sharpe:.3f} did not clear the promotion bar "
-            f"({args.min_sharpe}) — saving anyway because --force was passed."
+            f"Promotion gate failed ({'; '.join(failures)}) — saving anyway "
+            "because --force was passed."
         )
 
     model = PooledForestModel(**model_params)
@@ -154,6 +204,12 @@ def main():
             "holdout_start": str(holdout_dates.min().date()),
             "holdout_end": str(holdout_dates.max().date()),
             "holdout_passed": gate["passed"],
+            "wf_sharpe": wf_sharpe,
+            "wf_summary": wf_gate["summary"],
+            "wf_splits": args.wf_splits,
+            "wf_oos_days": wf_gate["n_days"],
+            "wf_passed": wf_gate["passed"],
+            "commission": args.commission,
             "validated_at": datetime.now().isoformat(timespec="seconds"),
         },
     )

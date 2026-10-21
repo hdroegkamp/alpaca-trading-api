@@ -22,7 +22,11 @@ from src.trading.ml.panel_split import (
     panel_walk_forward_splits,
 )
 from src.trading.ml.pooled_model import PooledForestModel
-from src.trading.ml.promotion import validate_holdout_promotion
+from src.trading.ml.promotion import (
+    validate_holdout_promotion,
+    validate_walk_forward_promotion,
+    walk_forward_backtest,
+)
 
 __all__ = [
     "FeatureEngineering",
@@ -36,4 +40,6 @@ __all__ = [
     "panel_walk_forward_splits",
     "PooledForestModel",
     "validate_holdout_promotion",
+    "validate_walk_forward_promotion",
+    "walk_forward_backtest",
 ]

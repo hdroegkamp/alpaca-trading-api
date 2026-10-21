@@ -308,13 +308,34 @@ Trains against the full `data/` archive and saves to `data/live/pooled_model_*.p
 this periodically (e.g. weekly) — the daily rebalance below only loads and scores, it never
 retrains.
 
-Before saving, it holds out the most recent `--holdout-days` (default 60) dates, trains a
-candidate on history only, and backtests that holdout window with the same accounting code
-used for research backtests (`PortfolioBacktest`) — this validates the *literal artifact*
-about to be deployed, not just the method. If the holdout Sharpe doesn't clear `--min-sharpe`
-(default 0.0 — must be profitable out-of-sample), the model is **not saved** and the command
-exits non-zero; override with `--force` if you've reviewed why and want to save anyway. The
-holdout metrics are stashed in the saved `_metadata.pkl` alongside the scaler/feature columns.
+Before saving, two gates must pass (both backtest with `PortfolioBacktest`, net of
+`--commission`, default 0.001):
+
+1. **Method gate (walk-forward).** Trains `--wf-splits` (default 10) expanding-window fold
+   models and stitches their out-of-sample books into one ~10-year curve. Its Sharpe must
+   clear `--wf-min-sharpe` (default 0.5). This is the gate that certifies an edge — over
+   ~2,400 OOS days the Sharpe's standard error is ~0.3.
+2. **Artifact gate (holdout).** Holds out the most recent `--holdout-days` (default 60)
+   dates, trains a candidate with the production hyperparameters on the rest, and requires
+   holdout Sharpe > `--min-sharpe` (default 0.0). This only catches an obviously broken
+   retrain — a 60-day Sharpe has a standard error of ~2, so it cannot tell skill from luck.
+
+If either fails, the model is **not saved** and the command exits non-zero; override with
+`--force` if you've reviewed why and want to save anyway. Both gates' metrics are stashed in
+the saved `_metadata.pkl` alongside the scaler/feature columns.
+
+Both gates train on the labeled panel but backtest on the **full** panel (every symbol, every
+date). The labeled panel drops each date's middle band *by forward return*, so backtesting on
+it picks the book from hindsight winners/losers — see `src/trading/ml/promotion.py`.
+
+To compare method changes (universe, label horizon, rebalance cadence) without touching the
+live model, use the read-only evaluation script — fix the configurations and pass bar before
+running, rather than iterating until something clears the gate:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_walk_forward.py --universe starter
+.\.venv\Scripts\python.exe scripts\evaluate_walk_forward.py --universe universes\top30.txt --forward-periods 5 --rebalance-every 5
+```
 
 ### Dry run (default — computes and logs intended trades, submits nothing)
 
