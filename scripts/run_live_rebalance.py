@@ -207,13 +207,16 @@ def main():
         max_drawdown=args.max_drawdown_pct,
     )
 
-    tripped, reason = evaluate_circuit_breaker(EQUITY_LOG, broker_equity, risk_manager)
+    tripped, reason = evaluate_circuit_breaker(
+        EQUITY_LOG, broker_equity, risk_manager, peak_since=state.get("reset_at")
+    )
     if tripped:
         save_breaker_state(
             breaker_state_path,
             triggered=True,
             reason=reason,
             triggered_at=datetime.now().isoformat(timespec="seconds"),
+            reset_at=state.get("reset_at"),
         )
         logger.error(f"Circuit breaker TRIPPED: {reason}. Halting — no orders submitted.")
         append_log(

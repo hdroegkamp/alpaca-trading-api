@@ -82,6 +82,49 @@ class TestEvaluateCircuitBreaker:
         assert tripped is True
         assert "Drawdown" in reason
 
+    def test_drawdown_measured_from_peak_since_reset(self, equity_log_path):
+        pd.DataFrame(
+            {
+                "timestamp": ["2026-01-05T09:35:00", "2026-01-06T09:35:00", "2026-01-07T09:35:00"],
+                "equity": [100_000.0, 105_000.0, 93_000.0],
+            }
+        ).to_csv(equity_log_path, index=False)
+        risk_manager = RiskManager(max_daily_loss=0.5, max_drawdown=0.10)
+
+        # Without a reset the old 105k peak re-trips immediately.
+        tripped, _ = evaluate_circuit_breaker(equity_log_path, 93_500.0, risk_manager)
+        assert tripped is True
+
+        # After a reset on Jan 8, the pre-reset peak no longer counts...
+        tripped, reason = evaluate_circuit_breaker(
+            equity_log_path, 93_500.0, risk_manager, peak_since="2026-01-08T08:00:00"
+        )
+        assert tripped is False
+        assert reason is None
+
+    def test_drawdown_still_trips_on_a_new_decline_after_reset(self, equity_log_path):
+        pd.DataFrame(
+            {
+                "timestamp": ["2026-01-06T09:35:00", "2026-01-09T09:35:00"],
+                "equity": [105_000.0, 95_000.0],
+            }
+        ).to_csv(equity_log_path, index=False)
+        risk_manager = RiskManager(max_daily_loss=0.5, max_drawdown=0.10)
+
+        # Post-reset peak is 95k; 84k is an ~11.6% drawdown from it.
+        tripped, reason = evaluate_circuit_breaker(
+            equity_log_path, 84_000.0, risk_manager, peak_since="2026-01-08T08:00:00"
+        )
+        assert tripped is True
+        assert "Drawdown" in reason
+
+    def test_reset_records_reset_at_and_trip_state_defaults_it(self, state_path):
+        save_breaker_state(state_path, triggered=True, reason="x")
+        assert load_breaker_state(state_path)["reset_at"] is None
+
+        reset_breaker_state(state_path, reset_at="2026-01-08T08:00:00")
+        assert load_breaker_state(state_path)["reset_at"] == "2026-01-08T08:00:00"
+
     def test_normal_day_does_not_trip(self, equity_log_path):
         _write_equity_log(equity_log_path, [100_000.0, 100_500.0])
         risk_manager = RiskManager(max_daily_loss=0.02, max_drawdown=0.10)

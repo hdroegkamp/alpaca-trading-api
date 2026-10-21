@@ -346,6 +346,9 @@ immediately, without doing any scoring or trading, until a human reviews what ha
 .\.venv\Scripts\python.exe scripts\run_live_rebalance.py --reset-circuit-breaker
 ```
 
+After a reset, drawdown is measured from the peak equity logged *since that reset*, so the
+pre-halt peak doesn't re-trip the breaker on the very next run.
+
 There is no automatic reset. If `scripts\run_live_rebalance.bat` ever exits non-zero, it appends
 an explicit `HALTED` marker to `logs\live_rebalance_task.log` so this isn't buried in scrollback.
 

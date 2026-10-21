@@ -19,6 +19,3 @@ dist/
 .python-version
 /data/
 settings.json
-
-# Career development documentation (personal use only)
-career-docs/

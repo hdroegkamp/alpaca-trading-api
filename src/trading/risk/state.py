@@ -9,6 +9,7 @@ deliberately resets it.
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -28,10 +29,11 @@ def load_breaker_state(path: PathLike = DEFAULT_STATE_PATH) -> dict:
     (e.g. the very first run).
     """
     path = Path(path)
+    default = {"triggered": False, "reason": None, "triggered_at": None, "reset_at": None}
     if not path.exists():
-        return {"triggered": False, "reason": None, "triggered_at": None}
+        return default
     with open(path) as f:
-        return json.load(f)
+        return {**default, **json.load(f)}
 
 
 def save_breaker_state(
@@ -39,27 +41,43 @@ def save_breaker_state(
     triggered: bool = True,
     reason: Optional[str] = None,
     triggered_at: Optional[str] = None,
+    reset_at: Optional[str] = None,
 ) -> None:
     """Persist breaker state to ``path``, creating parent directories as needed."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(
-            {"triggered": triggered, "reason": reason, "triggered_at": triggered_at},
+            {
+                "triggered": triggered,
+                "reason": reason,
+                "triggered_at": triggered_at,
+                "reset_at": reset_at,
+            },
             f,
             indent=2,
         )
 
 
-def reset_breaker_state(path: PathLike = DEFAULT_STATE_PATH) -> None:
-    """Clear a tripped breaker — the deliberate manual-reset step."""
-    save_breaker_state(path, triggered=False, reason=None, triggered_at=None)
+def reset_breaker_state(
+    path: PathLike = DEFAULT_STATE_PATH, reset_at: Optional[str] = None
+) -> None:
+    """Clear a tripped breaker — the deliberate manual-reset step.
+
+    Records ``reset_at`` (default: now) so drawdown is subsequently measured
+    from the peak *since this reset*; otherwise the pre-halt all-time peak
+    would re-trip the breaker on the very next run.
+    """
+    if reset_at is None:
+        reset_at = datetime.now().isoformat(timespec="seconds")
+    save_breaker_state(path, triggered=False, reason=None, triggered_at=None, reset_at=reset_at)
 
 
 def evaluate_circuit_breaker(
     equity_log_path: PathLike,
     current_equity: float,
     risk_manager: RiskManager,
+    peak_since: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Check today's equity against ``risk_manager``'s daily-loss/drawdown limits.
 
@@ -76,6 +94,9 @@ def evaluate_circuit_breaker(
         current_equity: This run's current account equity.
         risk_manager: Supplies the configured ``max_daily_loss`` /
             ``max_drawdown`` thresholds.
+        peak_since: ISO timestamp of the last manual reset, if any. Peak
+            equity for the drawdown check only considers log rows at or
+            after it (requires the log's ``timestamp`` column).
 
     Returns:
         ``(tripped, reason)`` — ``reason`` is set only when ``tripped`` is
@@ -90,7 +111,13 @@ def evaluate_circuit_breaker(
         return False, None
 
     prior_equity = float(history["equity"].iloc[-1])
-    peak_equity = max(float(history["equity"].max()), current_equity)
+    peak_history = history
+    if peak_since is not None:
+        since = pd.Timestamp(peak_since)
+        peak_history = history[pd.to_datetime(history["timestamp"]) >= since]
+    peak_equity = current_equity
+    if not peak_history.empty:
+        peak_equity = max(float(peak_history["equity"].max()), current_equity)
 
     daily_pnl = current_equity - prior_equity
     allowed, reason = risk_manager.check_daily_loss(daily_pnl, current_equity)
