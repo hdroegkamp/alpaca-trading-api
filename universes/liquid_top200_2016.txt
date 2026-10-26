@@ -6,6 +6,9 @@
 # Excludes symbols with a forward-filled (stale) run of >5 bars since 2016,
 # which is how ticker reuse shows up in the archive. Survivorship bias
 # remains: only symbols still listed today are in the archive.
+# Removed after selection: RTX and NVS - their spin-offs (RTX 2020, NVS's
+# Alcon 2019) aren't covered by Alpaca's split/dividend adjustment and read as
+# fake one-day moves of +71% / -82% (scripts/check_data_quality.py).
 AAPL
 AMZN
 META
@@ -68,7 +71,6 @@ MO
 FCX
 HAL
 MU
-RTX
 LOW
 UNP
 CAT
@@ -201,7 +203,6 @@ ADP
 AEP
 BBY
 STT
-NVS
 ITW
 TMUS
 AMD
