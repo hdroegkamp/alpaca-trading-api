@@ -36,6 +36,7 @@ import numpy as np
 import pandas as pd
 
 from src.trading.backtest.portfolio import PortfolioBacktest
+from src.trading.data.quality import audit_symbols, summarize_audit
 from src.trading.data.storage import DataStore
 from src.trading.data.universe import resolve_universe
 from src.trading.ml.cross_sectional_labels import add_cross_sectional_labels
@@ -119,6 +120,8 @@ def main():
 
     store = DataStore(data_dir=args.data_dir)
     symbols = resolve_universe(args.universe, data_store=store, timeframe=args.timeframe)
+    for line in summarize_audit(audit_symbols(store, symbols, args.timeframe)):
+        print(f"WARNING: {line}")
     panel = build_panel(
         symbols,
         store,

@@ -33,13 +33,22 @@ class DataStore:
         self.metadata_dir = self.data_dir / ".metadata"
         self.metadata_dir.mkdir(exist_ok=True)
 
-    def save(self, symbol: str, data: pd.DataFrame, timeframe: str = "1D") -> None:
+    def save(
+        self,
+        symbol: str,
+        data: pd.DataFrame,
+        timeframe: str = "1D",
+        adjustment: Optional[str] = None,
+    ) -> None:
         """Save historical data for a symbol.
 
         Args:
             symbol: Trading symbol
             data: OHLCV DataFrame
             timeframe: Data timeframe (e.g., '1D', '1H')
+            adjustment: Price adjustment the data was fetched with (e.g.
+                "all", "raw"), recorded in metadata. None means unknown —
+                treated as unadjusted by data-quality checks.
         """
         # Determine directory structure
         if self.organize_by_timeframe:
@@ -54,7 +63,7 @@ class DataStore:
         data.to_parquet(filepath, compression="gzip")
 
         # Save metadata
-        self._save_metadata(symbol, data, timeframe, filepath)
+        self._save_metadata(symbol, data, timeframe, filepath, adjustment)
 
         print(f"Saved {len(data)} rows to {filepath}")
 
@@ -133,7 +142,12 @@ class DataStore:
         return filepath.exists()
 
     def _save_metadata(
-        self, symbol: str, data: pd.DataFrame, timeframe: str, filepath: Path
+        self,
+        symbol: str,
+        data: pd.DataFrame,
+        timeframe: str,
+        filepath: Path,
+        adjustment: Optional[str] = None,
     ) -> None:
         """Save metadata about the dataset.
 
@@ -142,6 +156,7 @@ class DataStore:
             data: OHLCV DataFrame
             timeframe: Data timeframe
             filepath: Path where data was saved
+            adjustment: Price adjustment the data was fetched with
         """
         metadata = {
             "symbol": symbol,
@@ -153,6 +168,7 @@ class DataStore:
             "file_size_mb": float(filepath.stat().st_size / (1024 * 1024)),
             "last_updated": datetime.now().isoformat(),
             "columns": list(data.columns),
+            "adjustment": adjustment,
         }
 
         metadata_file = self.metadata_dir / f"{symbol}_{timeframe}.json"

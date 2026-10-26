@@ -18,4 +18,5 @@ build/
 dist/
 .python-version
 /data/
+/logs/
 settings.json

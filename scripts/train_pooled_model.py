@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.trading.data.quality import audit_symbols, summarize_audit, unadjusted_symbols
 from src.trading.data.storage import DataStore
 from src.trading.data.universe import resolve_universe
 from src.trading.ml.cross_sectional_labels import add_cross_sectional_labels
@@ -100,7 +101,8 @@ def main():
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Save the model even if it fails either promotion gate",
+        help="Save the model even if it fails either promotion gate, and train "
+        "even if some symbols' data is not split/dividend-adjusted",
     )
     args = parser.parse_args()
 
@@ -110,6 +112,16 @@ def main():
         logger.error(f"Universe '{args.universe}' resolved to no symbols.")
         sys.exit(1)
     logger.info(f"Universe '{args.universe}': {len(symbols)} symbols")
+
+    audit = audit_symbols(store, symbols, args.timeframe)
+    for line in summarize_audit(audit):
+        logger.warning(line)
+    if unadjusted_symbols(audit) and not args.force:
+        logger.error(
+            "Refusing to train on unadjusted prices (splits read as crashes). "
+            "Run scripts/update_archive.py, or pass --force to override."
+        )
+        sys.exit(1)
 
     panel = build_panel(
         symbols,

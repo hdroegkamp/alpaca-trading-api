@@ -27,7 +27,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from alpaca.trading.client import TradingClient
-from src.trading.data import AlpacaDataFetcher, DataStore
+from src.trading.data import DEFAULT_ADJUSTMENT, AlpacaDataFetcher, DataStore
+from src.trading.data.update import merge_new_bars
 from src.trading.utils.logging import setup_logger
 import os
 
@@ -256,21 +257,21 @@ def main():
                     elif args.update_existing:
                         # Get the last date of existing data
                         metadata = store.get_metadata(symbol, args.timeframe)
-                        if metadata:
+                        if metadata and metadata.get("adjustment") == DEFAULT_ADJUSTMENT:
                             last_date = metadata["end_date"]
-                            # Add one day to avoid duplicates
                             from datetime import datetime, timedelta
 
                             last_dt = datetime.fromisoformat(
                                 last_date.replace("Z", "+00:00")
                             )
-                            update_start = (last_dt + timedelta(days=1)).strftime(
+                            # Start a week early: the overlap is how
+                            # merge_new_bars detects a re-adjusted history
+                            update_start = (last_dt - timedelta(days=7)).strftime(
                                 "%Y-%m-%d"
                             )
 
                             logger.info(f"  ⟳ Updating from {update_start}...")
 
-                            # Fetch only new data
                             new_data = fetcher.fetch_bars(
                                 symbol=symbol,
                                 start=update_start,
@@ -278,35 +279,32 @@ def main():
                                 timeframe=args.timeframe,
                             )
 
-                            if new_data is None or len(new_data) == 0:
-                                logger.info(
-                                    f"  ✓ Already up-to-date (last: {last_date[:10]})"
-                                )
-                                skip_count += 1
-                                continue
-
-                            # Load existing data and append new data
                             existing_data = store.load(symbol, args.timeframe)
                             if existing_data is not None:
-                                # Combine and remove any duplicate timestamps
-                                combined_data = pd.concat([existing_data, new_data])
-                                combined_data = combined_data[
-                                    ~combined_data.index.duplicated(keep="last")
-                                ]
-                                combined_data = combined_data.sort_index()
-
-                                # Save updated data
-                                store.save(
-                                    symbol, combined_data, timeframe=args.timeframe
-                                )
-                                logger.info(
-                                    f"  ⟳ Updated: +{len(new_data)} bars (now {len(combined_data)} total, {combined_data.index[0]} to {combined_data.index[-1]})"
-                                )
-                                update_count += 1
-                                time.sleep(args.delay)
-                                continue
+                                combined_data = merge_new_bars(existing_data, new_data)
+                                if combined_data is not None:
+                                    if len(combined_data) == len(existing_data):
+                                        logger.info(
+                                            f"  ✓ Already up-to-date (last: {last_date[:10]})"
+                                        )
+                                        skip_count += 1
+                                        continue
+                                    store.save(
+                                        symbol,
+                                        combined_data,
+                                        timeframe=args.timeframe,
+                                        adjustment=DEFAULT_ADJUSTMENT,
+                                    )
+                                    logger.info(
+                                        f"  ⟳ Updated: +{len(combined_data) - len(existing_data)} bars (now {len(combined_data)} total, {combined_data.index[0]} to {combined_data.index[-1]})"
+                                    )
+                                    update_count += 1
+                                    time.sleep(args.delay)
+                                    continue
+                                logger.info("  ! History re-adjusted, re-downloading...")
+                                # Fall through to full download
                         else:
-                            logger.info(f"  ! No metadata found, re-downloading...")
+                            logger.info(f"  ! No adjusted metadata found, re-downloading...")
                             # Fall through to full download
 
                 # Fetch data (full download for new symbols)
@@ -323,7 +321,7 @@ def main():
                     continue
 
                 # Save to storage
-                store.save(symbol, data, timeframe=args.timeframe)
+                store.save(symbol, data, timeframe=args.timeframe, adjustment=DEFAULT_ADJUSTMENT)
                 logger.info(
                     f"  ✓ {len(data)} bars ({data.index[0]} to {data.index[-1]})"
                 )

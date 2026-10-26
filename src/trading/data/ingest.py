@@ -1,9 +1,36 @@
-"""Data ingestion from Alpaca and other sources."""
+"""Data ingestion from Alpaca and other sources.
+
+Bars are fetched split- and dividend-adjusted by default (``adjustment="all"``).
+Raw bars turn every split into a fake one-day crash (NVDA's 10:1 split reads
+as -90%), which poisons returns, features and labels alike. The catch: an
+adjusted history is rewritten whenever a new split or dividend occurs, so
+appending new bars to a stored adjusted file is only safe if the overlap
+still matches — see :func:`src.trading.data.update.merge_new_bars`.
+"""
 
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any, cast
 import os
+
+#: Adjustment applied when none is specified. Recorded in each stored file's
+#: metadata by DataStore.save so mixed raw/adjusted archives can be detected.
+DEFAULT_ADJUSTMENT = "all"
+
+_EXPECTED_COLS = ["open", "high", "low", "close", "volume"]
+
+
+def _alpaca_timeframe(timeframe: str):
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+    timeframe_map = {
+        "1Min": TimeFrame.Minute,
+        "5Min": TimeFrame(5, cast(TimeFrameUnit, TimeFrameUnit.Minute)),
+        "15Min": TimeFrame(15, cast(TimeFrameUnit, TimeFrameUnit.Minute)),
+        "1Hour": TimeFrame.Hour,
+        "1Day": TimeFrame.Day,
+    }
+    return timeframe_map.get(timeframe, TimeFrame.Day)
 
 
 class AlpacaDataFetcher:
@@ -45,6 +72,7 @@ class AlpacaDataFetcher:
         start: str,
         end: Optional[str] = None,
         timeframe: str = "1Day",
+        adjustment: str = DEFAULT_ADJUSTMENT,
     ) -> pd.DataFrame:
         """Fetch historical bar data.
 
@@ -53,29 +81,21 @@ class AlpacaDataFetcher:
             start: Start date (YYYY-MM-DD)
             end: End date (YYYY-MM-DD), defaults to today
             timeframe: Bar timeframe (1Day, 1Hour, etc.)
+            adjustment: Alpaca price adjustment — "all" (splits + dividends,
+                default), "split", "dividend" or "raw"
 
         Returns:
             DataFrame with OHLCV data
         """
         try:
+            from alpaca.data.enums import Adjustment
             from alpaca.data.historical import StockHistoricalDataClient
             from alpaca.data.requests import StockBarsRequest
-            from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
         except ImportError:
             raise ImportError("alpaca-py not installed. Run: pip install alpaca-py")
 
         # Create client
         client = StockHistoricalDataClient(self.api_key, self.api_secret)
-
-        # Parse timeframe
-        timeframe_map = {
-            "1Min": TimeFrame.Minute,
-            "5Min": TimeFrame(5, cast(TimeFrameUnit, TimeFrameUnit.Minute)),
-            "15Min": TimeFrame(15, cast(TimeFrameUnit, TimeFrameUnit.Minute)),
-            "1Hour": TimeFrame.Hour,
-            "1Day": TimeFrame.Day,
-        }
-        tf = timeframe_map.get(timeframe, TimeFrame.Day)
 
         # Build request
         if end is None:
@@ -83,9 +103,10 @@ class AlpacaDataFetcher:
 
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
-            timeframe=tf,
+            timeframe=_alpaca_timeframe(timeframe),
             start=datetime.strptime(start, "%Y-%m-%d"),
             end=datetime.strptime(end, "%Y-%m-%d"),
+            adjustment=Adjustment(adjustment),
         )
 
         # Fetch data
@@ -133,13 +154,64 @@ class AlpacaDataFetcher:
         df.columns = [col.lower() for col in df.columns]
 
         # Ensure we have the expected columns
-        expected_cols = ["open", "high", "low", "close", "volume"]
-        for col in expected_cols:
+        for col in _EXPECTED_COLS:
             if col not in df.columns:
                 raise ValueError(f"Missing column: {col}")
 
         # Explicitly cast to DataFrame to satisfy static type checkers
-        return cast(pd.DataFrame, df[expected_cols])
+        return cast(pd.DataFrame, df[_EXPECTED_COLS])
+
+    def fetch_bars_batch(
+        self,
+        symbols: List[str],
+        start: str,
+        end: Optional[str] = None,
+        timeframe: str = "1Day",
+        adjustment: str = DEFAULT_ADJUSTMENT,
+    ) -> Dict[str, pd.DataFrame]:
+        """Fetch bars for many symbols in one (paginated) request.
+
+        Far fewer API calls than :meth:`fetch_multiple` for archive-sized
+        symbol lists. Unlike ``fetch_multiple``, an API error (e.g. one
+        invalid symbol) raises for the whole batch — callers decide whether
+        to retry symbols individually.
+
+        Args:
+            symbols: Trading symbols
+            start: Start date (YYYY-MM-DD)
+            end: Exclusive end date (YYYY-MM-DD), defaults to today
+            timeframe: Bar timeframe
+            adjustment: See :meth:`fetch_bars`
+
+        Returns:
+            Dict mapping symbol -> OHLCV DataFrame; symbols with no bars in
+            the range are absent.
+        """
+        from alpaca.data.enums import Adjustment
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+
+        client = StockHistoricalDataClient(self.api_key, self.api_secret)
+        if end is None:
+            end = datetime.now().strftime("%Y-%m-%d")
+
+        bars = client.get_stock_bars(
+            StockBarsRequest(
+                symbol_or_symbols=symbols,
+                timeframe=_alpaca_timeframe(timeframe),
+                start=datetime.strptime(start, "%Y-%m-%d"),
+                end=datetime.strptime(end, "%Y-%m-%d"),
+                adjustment=Adjustment(adjustment),
+            )
+        )
+        df = bars.df
+        if df is None or df.empty:
+            return {}
+        df.columns = [c.lower() for c in df.columns]
+        return {
+            sym: cast(pd.DataFrame, g.droplevel("symbol")[_EXPECTED_COLS])
+            for sym, g in df.groupby(level="symbol")
+        }
 
     def fetch_multiple(
         self,

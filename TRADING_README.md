@@ -164,8 +164,9 @@ For more realistic testing, an event-driven engine will be added:
 ## Data Storage
 
 Data is stored as compressed parquet files in `data/`:
-- Format: `{SYMBOL}_{TIMEFRAME}.parquet`
-- Example: `AAPL_1Day.parquet`
+- Format: `{TIMEFRAME}/{SYMBOL}.parquet`, with metadata in `.metadata/{SYMBOL}_{TIMEFRAME}.json`
+- Example: `1Day/AAPL.parquet`
+- Prices are split/dividend-adjusted (see **Keep the archive current** below)
 - Efficient columnar storage with compression
 - Fast read/write for large datasets
 
@@ -297,6 +298,26 @@ copy .env.example .env
 # https://app.alpaca.markets/paper/dashboard/overview
 .\.venv\Scripts\python.exe scripts\check_alpaca.py   # confirms connectivity
 ```
+
+### Keep the archive current (before every retrain)
+
+```powershell
+.\.venv\Scripts\python.exe scripts\update_archive.py
+.\.venv\Scripts\python.exe scripts\check_data_quality.py
+```
+
+All bars are stored **split- and dividend-adjusted** (`adjustment="all"`, recorded in each
+file's `data/.metadata/*.json`). Raw bars turn every split into a fake one-day crash — NVDA's
+10:1 split reads as −90% — which corrupts returns, features and labels.
+
+An adjusted history is rewritten whenever a split or dividend happens, so plain appending is
+unsafe. `update_archive.py` re-fetches a week of overlap with each update: if the overlapping
+closes still match it appends; if not (or the file isn't adjusted yet) it re-downloads that
+symbol's full history. Re-running after an interruption resumes where it stopped.
+
+`check_data_quality.py` exits non-zero if any symbol is unadjusted and lists one-day moves
+above 50% (genuine events or bad prints — worth a look either way). `train_pooled_model.py`
+refuses unadjusted data unless `--force`; `evaluate_walk_forward.py` warns.
 
 ### Train a model
 

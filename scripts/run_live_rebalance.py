@@ -44,7 +44,7 @@ load_dotenv()
 
 import pandas as pd
 
-from src.trading.data.ingest import AlpacaDataFetcher
+from src.trading.data.ingest import DEFAULT_ADJUSTMENT, AlpacaDataFetcher
 from src.trading.data.storage import DataStore
 from src.trading.data.universe import resolve_universe
 from src.trading.execution.broker import AlpacaBroker
@@ -73,7 +73,7 @@ def refresh_data(symbols, store, timeframe, lookback_days):
     for symbol in symbols:
         try:
             data = fetcher.fetch_bars(symbol, start=start, timeframe=timeframe)
-            store.save(symbol, data, timeframe=timeframe)
+            store.save(symbol, data, timeframe=timeframe, adjustment=DEFAULT_ADJUSTMENT)
         except Exception as e:
             logger.warning(f"Could not refresh {symbol}: {e}")
 

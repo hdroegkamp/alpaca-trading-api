@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.trading.data import AlpacaDataFetcher, DataStore
+from src.trading.data import DEFAULT_ADJUSTMENT, AlpacaDataFetcher, DataStore
 from src.trading.strategy.examples import MovingAverageCrossover
 from src.trading.backtest import VectorizedBacktest
 from src.trading.utils.logging import setup_logger
@@ -52,7 +52,7 @@ def main():
             data = fetcher.fetch_bars(
                 symbol=symbol, start=start_date, end=datetime.now().strftime("%Y-%m-%d")
             )
-            store.save(symbol, data)
+            store.save(symbol, data, adjustment=DEFAULT_ADJUSTMENT)
             print(f"  ✓ Downloaded {len(data)} bars")
         except Exception as e:
             print(f"  ✗ Error downloading data: {e}")

@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.trading.data import AlpacaDataFetcher, DataStore
+from src.trading.data import DEFAULT_ADJUSTMENT, AlpacaDataFetcher, DataStore
 from src.trading.data.universe import UNIVERSES, load_universe_file
 from src.trading.utils.logging import setup_logger
 
@@ -131,7 +131,7 @@ def main():
                 )
 
                 # Save to storage
-                store.save(symbol, data, timeframe=args.timeframe)
+                store.save(symbol, data, timeframe=args.timeframe, adjustment=DEFAULT_ADJUSTMENT)
                 logger.info(f"  ✓ {symbol}: {len(data)} bars saved")
                 success_count += 1
 
